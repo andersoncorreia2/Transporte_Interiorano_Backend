@@ -6,13 +6,23 @@ from psycopg2 import IntegrityError
 from flask import Flask, jsonify, request
 import firebase_admin
 from firebase_admin import credentials, messaging
+import json
 
 app = Flask(__name__)
 
-# --- CONFIGURAÇÃO FIREBASE ---
-# Certifique-se de que o arquivo 'firebase-key.json' esteja na pasta do seu projeto!
-cred = credentials.Certificate("firebase-key.json")
-firebase_admin.initialize_app(cred)
+# --- CONFIGURAÇÃO SEGURA DO FIREBASE ---
+firebase_config_str = os.environ.get("FIREBASE_CONFIG_JSON")
+
+if firebase_config_str:
+    try:
+        firebase_config = json.loads(firebase_config_str)
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+        print("✅ Firebase inicializado com sucesso!")
+    except Exception as e:
+        print(f"❌ Erro ao inicializar Firebase: {e}")
+else:
+    print("⚠️ AVISO: FIREBASE_CONFIG_JSON não encontrada nas variáveis de ambiente!")
 
 def conectar_banco():
     DATABASE_URL = "postgresql://transporte_db_mc40_user:e1JFSWlEYZqmdecHqMUM2ZMxM6h43Zbb@dpg-d893okfavr4c739abl50-a.oregon-postgres.render.com/transporte_db_mc40"
