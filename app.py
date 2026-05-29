@@ -52,18 +52,25 @@ def criar_tabelas():
     cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token TEXT;")
     # Tabela de caronas
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS caronas (
-        id SERIAL PRIMARY KEY,
-        evento_nome TEXT,
-        cidade_origem TEXT,
-        origem_endereco TEXT,
-        cidade_destino TEXT,
-        destino_endereco TEXT,
-        horario TEXT,
-        vagas TEXT,
-        motorista TEXT
-    )
-""")
+        CREATE TABLE IF NOT EXISTS caronas (
+            id SERIAL PRIMARY KEY,
+            evento_nome TEXT,
+            cidade_origem TEXT,
+            endereco_origem TEXT,
+            cidade_destino TEXT,
+            endereco_destino TEXT,
+            horario TEXT,
+            vagas TEXT,
+            motorista TEXT
+        )
+    """)
+    
+    # Isso garante que as colunas novas existam mesmo se a tabela já existia
+    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS evento_nome TEXT;")
+    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_origem TEXT;")
+    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_origem TEXT;")
+    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_destino TEXT;")
+    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_destino TEXT;")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS solicitacoes (
