@@ -267,8 +267,15 @@ def listar_caronas():
     lista_caronas = []
     for carona in caronas_do_cofre:
         lista_caronas.append({
-            "id": carona["id"], "origem": carona["origem"], "destino": carona["destino"],
-            "horario": carona["horario"], "vagas": carona["vagas"], "motorista": carona["motorista"]
+            "id": carona["id"], 
+            "evento_nome": carona["evento_nome"],
+            "cidade_origem": carona["cidade_origem"],
+            "origem": carona["endereco_origem"], # Mapeando endereço para o App ler como origem
+            "cidade_destino": carona["cidade_destino"],
+            "destino": carona["endereco_destino"], # Mapeando endereço para o App ler como destino
+            "horario": carona["horario"], 
+            "vagas": carona["vagas"], 
+            "motorista": carona["motorista"]
         })
     return jsonify(lista_caronas)
 
