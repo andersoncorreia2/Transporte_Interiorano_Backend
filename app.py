@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request
 import firebase_admin
 from firebase_admin import credentials, messaging
 import json
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -114,6 +115,8 @@ def criar_tabelas():
             )
         """)
 
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        
         conexao.commit()
         print("✅ Tabelas criadas/verificadas com sucesso!")
         
@@ -332,16 +335,35 @@ def deletar_carona(id_carona):
 def listar_solicitacoes():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    # Busca tudo
     cursor.execute("SELECT * FROM solicitacoes")
     solicitacoes_do_cofre = cursor.fetchall()
+    
+    lista_solicitacoes = []
+    agora = datetime.now()
+
+    for sol in solicitacoes_do_cofre:
+        status = sol["status"]
+        
+        # Só verifica se for Pendente
+        if status == "Pendente" and sol["data_criacao"]:
+            # Se passou de 15 minutos (900 segundos)
+            if (agora - sol["data_criacao"]) > timedelta(minutes=15):
+                status = "Expirado"
+                # Atualiza no banco para ficar salvo
+                cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status, sol["id"]))
+                conexao.commit()
+
+        lista_solicitacoes.append({
+            "id": sol["id"], 
+            "carona_id": sol["carona_id"], 
+            "passageiro": sol["passageiro"], 
+            "status": status
+        })
+    
     cursor.close()
     conexao.close()
-
-    lista_solicitacoes = []
-    for sol in solicitacoes_do_cofre:
-        lista_solicitacoes.append({
-            "id": sol["id"], "carona_id": sol["carona_id"], "passageiro": sol["passageiro"], "status": sol["status"]
-        })
     return jsonify(lista_solicitacoes), 200
 
 @app.route("/solicitacoes", methods=["POST"])
@@ -362,8 +384,8 @@ def pedir_carona():
 
     # 2. Se a carona existir e tiver vaga, registra e notifica
     if resultado and int(resultado["vagas"]) > 0:
-        cursor.execute("INSERT INTO solicitacoes (carona_id, passageiro, status) VALUES (%s, %s, %s)", 
-                       (carona_id, dados["passageiro"], "Pendente"))
+        cursor.execute("INSERT INTO solicitacoes (carona_id, passageiro, status, data_criacao) VALUES (%s, %s, %s, %s)", 
+               (carona_id, dados["passageiro"], "Pendente", datetime.now()))
         conexao.commit()
         
         # 3. Dispara a notificação se o motorista tiver um token salvo
