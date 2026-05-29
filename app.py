@@ -58,66 +58,72 @@ def enviar_notificacao(token, titulo, corpo):
 def criar_tabelas():
     conexao = conectar_banco()
     cursor = conexao.cursor()
-    # Adicione esta linha nova aqui:
-    cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token TEXT;")
-    # Tabela de caronas
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS caronas (
-            id SERIAL PRIMARY KEY,
-            evento_nome TEXT,
-            cidade_origem TEXT,
-            endereco_origem TEXT,
-            cidade_destino TEXT,
-            endereco_destino TEXT,
-            horario TEXT,
-            vagas TEXT,
-            motorista TEXT
-        )
-    """)
     
-    # Adicione estas linhas para garantir que as colunas existam:
-    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS evento_nome TEXT;")
-    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_origem TEXT;")
-    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_origem TEXT;")
-    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_destino TEXT;")
-    cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_destino TEXT;")
-    
-    conexao.commit()
-    cursor.close()
-    conexao.close()
+    try:
+        # 1. Tabela de usuários
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                cpf TEXT PRIMARY KEY,
+                nome TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                telefone TEXT NOT NULL,
+                veiculo TEXT,
+                placa TEXT,
+                senha TEXT NOT NULL,
+                vagas TEXT,
+                rua TEXT,
+                numero TEXT,
+                complemento TEXT,
+                bairro TEXT,
+                cidade TEXT,
+                estado TEXT,
+                cep TEXT
+            )
+        """)
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token TEXT;")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS solicitacoes (
-            id SERIAL PRIMARY KEY,
-            carona_id INTEGER,
-            passageiro TEXT,
-            status TEXT
-        )
-    """)
+        # 2. Tabela de caronas
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS caronas (
+                id SERIAL PRIMARY KEY,
+                evento_nome TEXT,
+                cidade_origem TEXT,
+                endereco_origem TEXT,
+                cidade_destino TEXT,
+                endereco_destino TEXT,
+                horario TEXT,
+                vagas TEXT,
+                motorista TEXT
+            )
+        """)
+        
+        # Garantir colunas na caronas
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS evento_nome TEXT;")
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_origem TEXT;")
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_origem TEXT;")
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_destino TEXT;")
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_destino TEXT;")
+        
+        # 3. Tabela de solicitações
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacoes (
+                id SERIAL PRIMARY KEY,
+                carona_id INTEGER,
+                passageiro TEXT,
+                status TEXT
+            )
+        """)
 
-    # Tabela de usuários
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            cpf TEXT PRIMARY KEY,
-            nome TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            telefone TEXT NOT NULL,
-            veiculo TEXT,
-            placa TEXT,
-            senha TEXT NOT NULL,
-            vagas TEXT,
-            rua TEXT,
-            numero TEXT,
-            complemento TEXT,
-            bairro TEXT,
-            cidade TEXT,
-            estado TEXT,
-            cep TEXT
-        )
-    """)
-    conexao.commit()
-    cursor.close()
-    conexao.close()
+        conexao.commit()
+        print("✅ Tabelas criadas/verificadas com sucesso!")
+        
+    except Exception as e:
+        print(f"❌ Erro ao criar tabelas: {e}")
+        conexao.rollback()
+    finally:
+        # Fechamos a conexão apenas UMA vez, no final de tudo
+        cursor.close()
+        conexao.close()
 
 criar_tabelas()
 
