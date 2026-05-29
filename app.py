@@ -272,6 +272,7 @@ def listar_caronas():
         })
     return jsonify(lista_caronas)
 
+# --- ROTA POST ATUALIZADA ---
 @app.route("/caronas", methods=["POST"])
 def criar_carona():
     nova_carona = request.get_json()
@@ -280,13 +281,17 @@ def criar_carona():
 
     cursor.execute("DELETE FROM caronas WHERE motorista = %s", (nova_carona["motorista"],))
     cursor.execute("""
-        INSERT INTO caronas (origem, destino, horario, vagas, motorista)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (nova_carona["origem"], nova_carona["destino"], nova_carona["horario"], nova_carona["vagas"], nova_carona["motorista"]))
-
+        INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        nova_carona["evento_nome"], nova_carona["cidade_origem"], nova_carona["endereco_origem"], 
+        nova_carona["cidade_destino"], nova_carona["endereco_destino"], 
+        nova_carona["horario"], nova_carona["vagas"], nova_carona["motorista"]
+    ))
     conexao.commit()
     cursor.close()
     conexao.close()
+    
     return jsonify({"mensagem": "Carona salva sem duplicidades!"}), 201
 
 @app.route("/caronas/<int:id_carona>", methods=["DELETE"])
