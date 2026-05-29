@@ -65,12 +65,16 @@ def criar_tabelas():
         )
     """)
     
-    # Isso garante que as colunas novas existam mesmo se a tabela já existia
+    # Adicione estas linhas para garantir que as colunas existam:
     cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS evento_nome TEXT;")
     cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_origem TEXT;")
     cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_origem TEXT;")
     cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_destino TEXT;")
     cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_destino TEXT;")
+    
+    conexao.commit()
+    cursor.close()
+    conexao.close()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS solicitacoes (
