@@ -336,7 +336,11 @@ def listar_solicitacoes():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Busca tudo
+    # 1. A MÁGICA: Apaga os expirados do banco antes de listar!
+    cursor.execute("DELETE FROM solicitacoes WHERE status = 'Expirado'")
+    conexao.commit()
+
+    # 2. Busca tudo que sobrou
     cursor.execute("SELECT * FROM solicitacoes")
     solicitacoes_do_cofre = cursor.fetchall()
     
@@ -346,12 +350,10 @@ def listar_solicitacoes():
     for sol in solicitacoes_do_cofre:
         status = sol["status"]
         
-        # Só verifica se for Pendente
+        # Lógica de expiração (se for Pendente e passou de 15 min)
         if status == "Pendente" and sol["data_criacao"]:
-            # Se passou de 15 minutos (900 segundos)
             if (agora - sol["data_criacao"]) > timedelta(minutes=15):
                 status = "Expirado"
-                # Atualiza no banco para ficar salvo
                 cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status, sol["id"]))
                 conexao.commit()
 
