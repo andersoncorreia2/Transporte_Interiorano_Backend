@@ -443,17 +443,17 @@ def finalizar_corrida():
     # Aumenta +1 na contagem de eventos (corridas_realizadas)
     # Aumenta +1 na contagem de passageiros (já que você finaliza uma corrida por passageiro)
     cursor.execute("""
-        UPDATE usuarios 
-        SET corridas_realizadas = corridas_realizadas + 1,
-            passageiros_conduzidos = passageiros_conduzidos + 1 
-        WHERE nome = %s
+    UPDATE usuarios 
+    SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
+        passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 
+    WHERE nome = %s
     """, (motorista_nome,))
 
     # 2. Atualiza o passageiro:
     # Aumenta +1 na contagem de eventos participados
     cursor.execute("""
         UPDATE usuarios 
-        SET corridas_realizadas = corridas_realizadas + 1 
+        SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
         WHERE nome = %s
     """, (passageiro_nome,))
 
