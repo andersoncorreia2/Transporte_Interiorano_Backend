@@ -115,16 +115,18 @@ def criar_tabelas():
             )
         """)
 
-        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")       
+        
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS corridas_realizadas INTEGER DEFAULT 0;")
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS passageiros_conduzidos INTEGER DEFAULT 0;")
         
         conexao.commit()
-        print("✅ Tabelas criadas/verificadas com sucesso!")
+        print("✅ Tabelas e colunas verificadas com sucesso!")
         
     except Exception as e:
         print(f"❌ Erro ao criar tabelas: {e}")
         conexao.rollback()
     finally:
-        # Fechamos a conexão apenas UMA vez, no final de tudo
         cursor.close()
         conexao.close()
 
@@ -452,9 +454,9 @@ def finalizar_corrida():
     # 2. Atualiza o passageiro:
     # Aumenta +1 na contagem de eventos participados
     cursor.execute("""
-        UPDATE usuarios 
-        SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
-        WHERE nome = %s
+    UPDATE usuarios 
+    SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
+    WHERE nome = %s
     """, (passageiro_nome,))
 
     # 3. Remove o pedido da tela
