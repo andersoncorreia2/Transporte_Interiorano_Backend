@@ -438,29 +438,32 @@ def finalizar_corrida():
     motorista_nome = dados["motorista"]
     passageiro_nome = dados["passageiro"]
     
+    # Log para rastrear os nomes que estão chegando
+    print(f"DEBUG: Finalizando corrida - Motorista: '{motorista_nome}', Passageiro: '{passageiro_nome}'")
+    
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    # 1. Atualiza o motorista:
-    # Aumenta +1 na contagem de eventos (corridas_realizadas)
-    # Aumenta +1 na contagem de passageiros (já que você finaliza uma corrida por passageiro)
+    # 1. Atualiza o motorista com TRIM para ignorar espaços extras
     cursor.execute("""
     UPDATE usuarios 
     SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
         passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 
-    WHERE nome = %s
+    WHERE TRIM(nome) = TRIM(%s)
     """, (motorista_nome,))
 
-    # 2. Atualiza o passageiro:
-    # Aumenta +1 na contagem de eventos participados
+    # 2. Atualiza o passageiro com TRIM
     cursor.execute("""
     UPDATE usuarios 
     SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
-    WHERE nome = %s
+    WHERE TRIM(nome) = TRIM(%s)
     """, (passageiro_nome,))
 
     # 3. Remove o pedido da tela
     cursor.execute("DELETE FROM solicitacoes WHERE passageiro = %s AND carona_id IN (SELECT id FROM caronas WHERE motorista = %s)", (passageiro_nome, motorista_nome))
+
+    # Log confirmando que os updates foram feitos
+    print("DEBUG: Execução de UPDATE finalizada.")
 
     conexao.commit()
     cursor.close()
