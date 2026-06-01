@@ -430,6 +430,41 @@ def cancelar_solicitacao(id_solicitacao):
     
     return jsonify({"mensagem": "Pedido cancelado pelo passageiro e vaga devolvida!"}), 200
 
+@app.route("/finalizar_corrida", methods=["POST"])
+def finalizar_corrida():
+    dados = request.get_json()
+    motorista_nome = dados["motorista"]
+    passageiro_nome = dados["passageiro"]
+    
+    conexao = conectar_banco()
+    cursor = conexao.cursor()
+
+    # 1. Atualiza o motorista:
+    # Aumenta +1 na contagem de eventos (corridas_realizadas)
+    # Aumenta +1 na contagem de passageiros (já que você finaliza uma corrida por passageiro)
+    cursor.execute("""
+        UPDATE usuarios 
+        SET corridas_realizadas = corridas_realizadas + 1,
+            passageiros_conduzidos = passageiros_conduzidos + 1 
+        WHERE nome = %s
+    """, (motorista_nome,))
+
+    # 2. Atualiza o passageiro:
+    # Aumenta +1 na contagem de eventos participados
+    cursor.execute("""
+        UPDATE usuarios 
+        SET corridas_realizadas = corridas_realizadas + 1 
+        WHERE nome = %s
+    """, (passageiro_nome,))
+
+    # 3. Remove o pedido da tela
+    cursor.execute("DELETE FROM solicitacoes WHERE passageiro = %s AND carona_id IN (SELECT id FROM caronas WHERE motorista = %s)", (passageiro_nome, motorista_nome))
+
+    conexao.commit()
+    cursor.close()
+    conexao.close()
+    return jsonify({"mensagem": "Corrida finalizada e métricas atualizadas!"}), 200
+
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
     porta = int(os.environ.get("PORT", 5000))
