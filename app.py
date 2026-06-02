@@ -435,11 +435,14 @@ def cancelar_solicitacao(id_solicitacao):
 @app.route("/finalizar_corrida", methods=["POST"])
 def finalizar_corrida():
     dados = request.get_json()
-    motorista_nome = dados["motorista"]
-    passageiro_nome = dados["passageiro"]
+    motorista_nome = dados.get("motorista")
+    passageiro_nome = dados.get("passageiro")
     
-    # Logs originais que você queria manter
+    # Logs originais que você quer manter
     print(f"DEBUG: Finalizando corrida - Motorista: '{motorista_nome}', Passageiro: '{passageiro_nome}'")
+    
+    # Log de diagnóstico para garantir que os dados chegaram no servidor
+    print(f"DEBUG_TOTAL: Dados recebidos pelo servidor: {dados}")
     
     conexao = conectar_banco()
     cursor = conexao.cursor()
