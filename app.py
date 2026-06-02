@@ -194,6 +194,21 @@ def checar_cpf(cpf_digitado):
     else:
         return jsonify({"existe": False}), 200
 
+@app.route("/usuarios_por_email/<email_seguro>", methods=["GET"])
+def buscar_por_email(email_seguro):
+    email_real = urllib.parse.unquote(email_seguro)
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT corridas_realizadas, passageiros_conduzidos FROM usuarios WHERE email = %s", (email_real,))
+    usuario = cursor.fetchone()
+    cursor.close()
+    conexao.close()
+    
+    if usuario:
+        return jsonify(usuario), 200
+    else:
+        return jsonify({"corridas_realizadas": 0, "passageiros_conduzidos": 0}), 200
+
 @app.route("/usuarios/<email_seguro>", methods=["DELETE"])
 def excluir_conta(email_seguro):
     email_real = urllib.parse.unquote(email_seguro)
