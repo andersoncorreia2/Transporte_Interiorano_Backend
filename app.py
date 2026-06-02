@@ -438,31 +438,33 @@ def finalizar_corrida():
     motorista_nome = dados["motorista"]
     passageiro_nome = dados["passageiro"]
     
-    # Log para rastrear os nomes que estão chegando
+    # Logs originais que você queria manter
     print(f"DEBUG: Finalizando corrida - Motorista: '{motorista_nome}', Passageiro: '{passageiro_nome}'")
     
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    # 1. Atualiza o motorista com TRIM para ignorar espaços extras
+    # 1. Atualiza o motorista
     cursor.execute("""
     UPDATE usuarios 
     SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
         passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 
-    WHERE TRIM(nome) = TRIM(%s)
+    WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
     """, (motorista_nome,))
+    print(f"DEBUG: Linhas afetadas (Motorista): {cursor.rowcount}")
 
-    # 2. Atualiza o passageiro com TRIM
+    # 2. Atualiza o passageiro
     cursor.execute("""
     UPDATE usuarios 
     SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
-    WHERE TRIM(nome) = TRIM(%s)
+    WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
     """, (passageiro_nome,))
+    print(f"DEBUG: Linhas afetadas (Passageiro): {cursor.rowcount}")
 
     # 3. Remove o pedido da tela
     cursor.execute("DELETE FROM solicitacoes WHERE passageiro = %s AND carona_id IN (SELECT id FROM caronas WHERE motorista = %s)", (passageiro_nome, motorista_nome))
 
-    # Log confirmando que os updates foram feitos
+    # Log de finalização
     print("DEBUG: Execução de UPDATE finalizada.")
 
     conexao.commit()
