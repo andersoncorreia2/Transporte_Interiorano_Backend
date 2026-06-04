@@ -209,6 +209,40 @@ def buscar_por_email(email_seguro):
     else:
         return jsonify({"corridas_realizadas": 0, "passageiros_conduzidos": 0}), 200
 
+@app.route("/usuarios_por_nome/<nome_motorista>", methods=["GET"])
+def buscar_por_nome(nome_motorista):
+    nome_real = urllib.parse.unquote(nome_motorista)
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    # Busca métricas pelo NOME (usando TRIM/LOWER para evitar erros de digitação)
+    cursor.execute("""
+        SELECT corridas_realizadas, passageiros_conduzidos 
+        FROM usuarios 
+        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
+    """, (nome_real,))
+    usuario = cursor.fetchone()
+    cursor.close()
+    conexao.close()
+    
+    if usuario:
+        return jsonify(usuario), 200
+    return jsonify({"corridas_realizadas": 0, "passageiros_conduzidos": 0}), 200
+
+@app.route("/usuarios_por_cpf/<cpf>", methods=["GET"])
+def buscar_por_cpf(cpf):
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    # Busca métricas pelo CPF do motorista
+    cursor.execute("SELECT corridas_realizadas, passageiros_conduzidos FROM usuarios WHERE cpf = %s", (cpf,))
+    usuario = cursor.fetchone()
+    cursor.close()
+    conexao.close()
+    
+    if usuario:
+        return jsonify(usuario), 200
+    else:
+        return jsonify({"corridas_realizadas": 0, "passageiros_conduzidos": 0}), 200
+
 @app.route("/usuarios/<email_seguro>", methods=["DELETE"])
 def excluir_conta(email_seguro):
     email_real = urllib.parse.unquote(email_seguro)
@@ -311,31 +345,42 @@ def listar_caronas():
             "destino": carona.get("endereco_destino", ""),
             "horario": carona.get("horario", ""),
             "vagas": carona.get("vagas", "0"),
-            "motorista": carona.get("motorista", "")
+            "motorista": carona.get("motorista", ""),
+            "motorista_cpf": carona.get("motorista_cpf", "") # <--- A VÍRGULA DEVE ESTAR AQUI
         })
     return jsonify(lista_caronas)
 
 # --- ROTA POST ATUALIZADA ---
 @app.route("/caronas", methods=["POST"])
 def criar_carona():
-    nova_carona = request.get_json()
+    dados = request.get_json()
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    cursor.execute("DELETE FROM caronas WHERE motorista = %s", (nova_carona["motorista"],))
+    # 1. Remove qualquer carona antiga desse motorista para evitar duplicidade
+    cursor.execute("DELETE FROM caronas WHERE motorista = %s", (dados["motorista"],))
+    
+    # 2. Insere a nova carona incluindo o motorista_cpf
     cursor.execute("""
-        INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
-        nova_carona["evento_nome"], nova_carona["cidade_origem"], nova_carona["endereco_origem"], 
-        nova_carona["cidade_destino"], nova_carona["endereco_destino"], 
-        nova_carona["horario"], nova_carona["vagas"], nova_carona["motorista"]
+        dados["evento_nome"], 
+        dados["cidade_origem"], 
+        dados["endereco_origem"], 
+        dados["cidade_destino"], 
+        dados["endereco_destino"], 
+        dados["horario"], 
+        dados["vagas"], 
+        dados["motorista"],
+        dados["motorista_cpf"] # 🆕 O CPF entra aqui!
     ))
+    
     conexao.commit()
     cursor.close()
     conexao.close()
     
-    return jsonify({"mensagem": "Carona salva sem duplicidades!"}), 201
+    return jsonify({"mensagem": "Carona salva com CPF do motorista!"}), 201
 
 @app.route("/caronas/<int:id_carona>", methods=["DELETE"])
 def deletar_carona(id_carona):
