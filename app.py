@@ -327,9 +327,10 @@ def recuperar_senha():
 
 @app.route("/caronas", methods=["GET"])
 def listar_caronas():
+    # 🆕 AGORA BUSCA APENAS AS CARONAS COM STATUS 'Aberta'
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM caronas")
+    cursor.execute("SELECT * FROM caronas WHERE status = 'Aberta'") 
     caronas_do_cofre = cursor.fetchall()
     cursor.close()
     conexao.close()
@@ -346,7 +347,7 @@ def listar_caronas():
             "horario": carona.get("horario", ""),
             "vagas": carona.get("vagas", "0"),
             "motorista": carona.get("motorista", ""),
-            "motorista_cpf": carona.get("motorista_cpf", "") # <--- A VÍRGULA DEVE ESTAR AQUI
+            "motorista_cpf": carona.get("motorista_cpf", "")
         })
     return jsonify(lista_caronas)
 
@@ -357,10 +358,10 @@ def criar_carona():
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    # 1. Remove qualquer carona antiga desse motorista para evitar duplicidade
-    cursor.execute("DELETE FROM caronas WHERE motorista = %s", (dados["motorista"],))
+    # 🔴 A LINHA DO 'DELETE' FOI ARRANCADA DAQUI! 
+    # Agora o motorista pode ter 10 eventos no mesmo dia, se quiser.
     
-    # 2. Insere a nova carona no banco
+    # 1. Insere a nova carona no banco
     cursor.execute("""
         INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -370,14 +371,13 @@ def criar_carona():
         dados["vagas"], dados["motorista"], dados["motorista_cpf"]
     ))
     
-    # 3. 🆕 AQUI ESTÁ O SEU CÓDIGO! Atualiza a corrida E as vagas ofertadas.
-    # Usamos int(dados["vagas"]) para garantir que o texto "4" vire o número 4 na matemática do banco.
+    # 2. Atualiza as vagas e a corrida usando o NOME (nossa blindagem matemática)
     cursor.execute("""
         UPDATE usuarios 
         SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
             vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s 
-        WHERE cpf = %s
-    """, (int(dados["vagas"]), dados["motorista_cpf"]))
+        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
+    """, (int(dados["vagas"]), dados["motorista"]))
     
     conexao.commit()
     cursor.close()
@@ -498,33 +498,28 @@ def cancelar_solicitacao(id_solicitacao):
 @app.route("/finalizar_corrida", methods=["POST"])
 def finalizar_corrida():
     dados = request.get_json()
-    motorista_nome = dados.get("motorista")
-    passageiro_nome = dados.get("passageiro")
-    
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    # 1. Atualiza o motorista (🆕 AGORA ELE SÓ GANHA +1 PASSAGEIRO AQUI)
+    # 1. Em vez de deletar, nós alteramos a etiqueta para 'Finalizada'
     cursor.execute("""
-    UPDATE usuarios 
-    SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 
-    WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-    """, (motorista_nome,))
-
-    # 2. Atualiza o passageiro (Ganha +1 corrida por ter viajado)
+        UPDATE caronas 
+        SET status = 'Finalizada' 
+        WHERE id = %s
+    """, (dados["id"],))
+    
+    # 2. Mantemos a contagem de passageiros conduzidos do motorista (sua regra de ouro)
     cursor.execute("""
-    UPDATE usuarios 
-    SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
-    WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-    """, (passageiro_nome,))
-
-    # 3. Remove o pedido da tela
-    cursor.execute("DELETE FROM solicitacoes WHERE passageiro = %s AND carona_id IN (SELECT id FROM caronas WHERE motorista = %s)", (passageiro_nome, motorista_nome))
-
+        UPDATE usuarios 
+        SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + %s
+        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
+    """, (int(dados["quantidade"]), dados["motorista"]))
+    
     conexao.commit()
     cursor.close()
     conexao.close()
-    return jsonify({"mensagem": "Corrida finalizada e métricas atualizadas!"}), 200
+    
+    return jsonify({"mensagem": "Viagem arquivada com sucesso!"}), 200
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
