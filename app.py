@@ -360,27 +360,30 @@ def criar_carona():
     # 1. Remove qualquer carona antiga desse motorista para evitar duplicidade
     cursor.execute("DELETE FROM caronas WHERE motorista = %s", (dados["motorista"],))
     
-    # 2. Insere a nova carona incluindo o motorista_cpf
+    # 2. Insere a nova carona no banco
     cursor.execute("""
         INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
-        dados["evento_nome"], 
-        dados["cidade_origem"], 
-        dados["endereco_origem"], 
-        dados["cidade_destino"], 
-        dados["endereco_destino"], 
-        dados["horario"], 
-        dados["vagas"], 
-        dados["motorista"],
-        dados["motorista_cpf"] # 🆕 O CPF entra aqui!
+        dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
+        dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
+        dados["vagas"], dados["motorista"], dados["motorista_cpf"]
     ))
+    
+    # 3. 🆕 AQUI ESTÁ O SEU CÓDIGO! Atualiza a corrida E as vagas ofertadas.
+    # Usamos int(dados["vagas"]) para garantir que o texto "4" vire o número 4 na matemática do banco.
+    cursor.execute("""
+        UPDATE usuarios 
+        SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
+            vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s 
+        WHERE cpf = %s
+    """, (int(dados["vagas"]), dados["motorista_cpf"]))
     
     conexao.commit()
     cursor.close()
     conexao.close()
     
-    return jsonify({"mensagem": "Carona salva com CPF do motorista!"}), 201
+    return jsonify({"mensagem": "Carona salva com corridas e vagas contabilizadas!"}), 201
 
 @app.route("/caronas/<int:id_carona>", methods=["DELETE"])
 def deletar_carona(id_carona):
@@ -498,37 +501,25 @@ def finalizar_corrida():
     motorista_nome = dados.get("motorista")
     passageiro_nome = dados.get("passageiro")
     
-    # Logs originais que você quer manter
-    print(f"DEBUG: Finalizando corrida - Motorista: '{motorista_nome}', Passageiro: '{passageiro_nome}'")
-    
-    # Log de diagnóstico para garantir que os dados chegaram no servidor
-    print(f"DEBUG_TOTAL: Dados recebidos pelo servidor: {dados}")
-    
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    # 1. Atualiza o motorista
+    # 1. Atualiza o motorista (🆕 AGORA ELE SÓ GANHA +1 PASSAGEIRO AQUI)
     cursor.execute("""
     UPDATE usuarios 
-    SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
-        passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 
+    SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 
     WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
     """, (motorista_nome,))
-    print(f"DEBUG: Linhas afetadas (Motorista): {cursor.rowcount}")
 
-    # 2. Atualiza o passageiro
+    # 2. Atualiza o passageiro (Ganha +1 corrida por ter viajado)
     cursor.execute("""
     UPDATE usuarios 
     SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 
     WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
     """, (passageiro_nome,))
-    print(f"DEBUG: Linhas afetadas (Passageiro): {cursor.rowcount}")
 
     # 3. Remove o pedido da tela
     cursor.execute("DELETE FROM solicitacoes WHERE passageiro = %s AND carona_id IN (SELECT id FROM caronas WHERE motorista = %s)", (passageiro_nome, motorista_nome))
-
-    # Log de finalização
-    print("DEBUG: Execução de UPDATE finalizada.")
 
     conexao.commit()
     cursor.close()
