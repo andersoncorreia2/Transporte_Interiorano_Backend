@@ -94,9 +94,12 @@ def criar_tabelas():
                 endereco_destino TEXT,
                 horario TEXT,
                 vagas TEXT,
-                motorista TEXT
+                motorista TEXT,
+                status TEXT DEFAULT 'Aberta'
             )
         """)
+        # E garanta que a coluna exista caso a tabela já tivesse sido criada antes:
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Aberta';")
         
         # Garantir colunas na caronas
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS evento_nome TEXT;")
@@ -347,7 +350,8 @@ def listar_caronas():
             "horario": carona.get("horario", ""),
             "vagas": carona.get("vagas", "0"),
             "motorista": carona.get("motorista", ""),
-            "motorista_cpf": carona.get("motorista_cpf", "")
+            "motorista_cpf": carona.get("motorista_cpf", ""),
+            "status": carona.get("status", "Aberta") // Adicionado
         })
     return jsonify(lista_caronas)
 
@@ -495,31 +499,32 @@ def cancelar_solicitacao(id_solicitacao):
     
     return jsonify({"mensagem": "Pedido cancelado pelo passageiro e vaga devolvida!"}), 200
 
-@app.route("/finalizar_corrida", methods=["POST"])
-def finalizar_corrida():
+@app.route("/finalizar_solicitacao", methods=["POST"])
+def finalizar_solicitacao():
     dados = request.get_json()
+    # Espera: {"solicitacao_id": id, "motorista": nome}
     conexao = conectar_banco()
     cursor = conexao.cursor()
 
-    # 1. Em vez de deletar, nós alteramos a etiqueta para 'Finalizada'
-    cursor.execute("""
-        UPDATE caronas 
-        SET status = 'Finalizada' 
-        WHERE id = %s
-    """, (dados["id"],))
-    
-    # 2. Mantemos a contagem de passageiros conduzidos do motorista (sua regra de ouro)
-    cursor.execute("""
-        UPDATE usuarios 
-        SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + %s
-        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-    """, (int(dados["quantidade"]), dados["motorista"]))
-    
-    conexao.commit()
-    cursor.close()
-    conexao.close()
-    
-    return jsonify({"mensagem": "Viagem arquivada com sucesso!"}), 200
+    try:
+        # 1. Marca apenas esta solicitação como finalizada
+        cursor.execute("UPDATE solicitacoes SET status = 'Finalizado' WHERE id = %s", (dados["solicitacao_id"],))
+        
+        # 2. Atualiza as métricas do motorista
+        cursor.execute("""
+            UPDATE usuarios 
+            SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1
+            WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
+        """, (dados["motorista"],))
+        
+        conexao.commit()
+        return jsonify({"mensagem": "Solicitação finalizada com sucesso!"}), 200
+    except Exception as e:
+        conexao.rollback()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
