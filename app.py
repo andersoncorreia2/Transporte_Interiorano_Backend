@@ -351,7 +351,7 @@ def listar_caronas():
             "vagas": carona.get("vagas", "0"),
             "motorista": carona.get("motorista", ""),
             "motorista_cpf": carona.get("motorista_cpf", ""),
-            "status": carona.get("status", "Aberta") // Adicionado
+            "status": carona.get("status", "Aberta")
         })
     return jsonify(lista_caronas)
 
