@@ -518,13 +518,45 @@ def finalizar_solicitacao():
         """, (dados["motorista"],))
         
         conexao.commit()
-        return jsonify({"mensagem": "Solicitação finalizada com sucesso!"}), 200
+        return jsonify({"mensagem": "Passageiro finalizado com sucesso!"}), 200
     except Exception as e:
         conexao.rollback()
         return jsonify({"erro": str(e)}), 500
     finally:
         cursor.close()
         conexao.close()
+        
+@app.route("/historico/<passageiro>", methods=["GET"])
+def listar_historico_passageiro(passageiro):
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    # Busca solicitações finalizadas deste passageiro
+    cursor.execute("""
+        SELECT s.*, c.evento_nome, c.horario 
+        FROM solicitacoes s 
+        JOIN caronas c ON s.carona_id = c.id 
+        WHERE s.passageiro = %s AND s.status = 'Finalizado'
+    """, (passageiro,))
+    historico = cursor.fetchall()
+    cursor.close()
+    conexao.close()
+    return jsonify(historico)
+
+# Se quiser uma rota para o motorista ver o histórico dele também:
+@app.route("/historico_motorista/<motorista>", methods=["GET"])
+def listar_historico_motorista(motorista):
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT s.*, c.evento_nome, c.horario 
+        FROM solicitacoes s 
+        JOIN caronas c ON s.carona_id = c.id 
+        WHERE c.motorista = %s AND s.status = 'Finalizado'
+    """, (motorista,))
+    historico = cursor.fetchall()
+    cursor.close()
+    conexao.close()
+    return jsonify(historico)      
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
