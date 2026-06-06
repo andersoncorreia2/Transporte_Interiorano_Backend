@@ -410,7 +410,7 @@ def listar_solicitacoes():
     conexao.commit()
 
     # 2. Busca tudo que sobrou
-    cursor.execute("SELECT * FROM solicitacoes")
+    cursor.execute("SELECT * FROM solicitacoes WHERE status != 'Finalizado'")
     solicitacoes_do_cofre = cursor.fetchall()
     
     lista_solicitacoes = []
@@ -513,7 +513,8 @@ def finalizar_solicitacao():
         # 2. Atualiza as métricas do motorista
         cursor.execute("""
             UPDATE usuarios 
-            SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1
+            SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1,
+                corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
             WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
         """, (dados["motorista"],))
         
