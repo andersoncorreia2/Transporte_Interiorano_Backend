@@ -361,11 +361,8 @@ def criar_carona():
     dados = request.get_json()
     conexao = conectar_banco()
     cursor = conexao.cursor()
-
-    # 🔴 A LINHA DO 'DELETE' FOI ARRANCADA DAQUI! 
-    # Agora o motorista pode ter 10 eventos no mesmo dia, se quiser.
     
-    # 1. Insere a nova carona no banco
+    # 1. Insere a carona
     cursor.execute("""
         INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -375,19 +372,18 @@ def criar_carona():
         dados["vagas"], dados["motorista"], dados["motorista_cpf"]
     ))
     
-    # 2. Atualiza as vagas e a corrida usando o NOME (nossa blindagem matemática)
+    # 2. Incrementa a CORRIDA (apenas 1 vez por evento criado)
     cursor.execute("""
         UPDATE usuarios 
-        SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1,
-            vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s 
+        SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
         WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-    """, (int(dados["vagas"]), dados["motorista"]))
+    """, (dados["motorista"],))
     
     conexao.commit()
     cursor.close()
     conexao.close()
     
-    return jsonify({"mensagem": "Carona salva com corridas e vagas contabilizadas!"}), 201
+    return jsonify({"mensagem": "Evento criado e corrida contabilizada!"}), 201
 
 @app.route("/caronas/<int:id_carona>", methods=["DELETE"])
 def deletar_carona(id_carona):
@@ -502,19 +498,16 @@ def cancelar_solicitacao(id_solicitacao):
 @app.route("/finalizar_solicitacao", methods=["POST"])
 def finalizar_solicitacao():
     dados = request.get_json()
-    # Espera: {"solicitacao_id": id, "motorista": nome}
     conexao = conectar_banco()
     cursor = conexao.cursor()
-
     try:
-        # 1. Marca apenas esta solicitação como finalizada
+        # 1. Marca a solicitação como finalizada
         cursor.execute("UPDATE solicitacoes SET status = 'Finalizado' WHERE id = %s", (dados["solicitacao_id"],))
         
-        # 2. Atualiza as métricas do motorista
+        # 2. Incrementa APENAS o passageiro (a corrida já foi contada na criação da carona)
         cursor.execute("""
             UPDATE usuarios 
-            SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1,
-                corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
+            SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1
             WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
         """, (dados["motorista"],))
         
