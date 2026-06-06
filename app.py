@@ -366,13 +366,11 @@ def criar_carona():
     cursor.execute("""
         INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
-        dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
-        dados["vagas"], dados["motorista"], dados["motorista_cpf"]
-    ))
+    """, (dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
+          dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
+          dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
     
-    # 2. Incrementa a CORRIDA (apenas 1 vez por evento criado)
+    # 2. Incrementa a CORRIDA apenas 1 vez, aqui na criação!
     cursor.execute("""
         UPDATE usuarios 
         SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
@@ -382,7 +380,6 @@ def criar_carona():
     conexao.commit()
     cursor.close()
     conexao.close()
-    
     return jsonify({"mensagem": "Evento criado e corrida contabilizada!"}), 201
 
 @app.route("/caronas/<int:id_carona>", methods=["DELETE"])
@@ -501,10 +498,9 @@ def finalizar_solicitacao():
     conexao = conectar_banco()
     cursor = conexao.cursor()
     try:
-        # 1. Marca a solicitação como finalizada
         cursor.execute("UPDATE solicitacoes SET status = 'Finalizado' WHERE id = %s", (dados["solicitacao_id"],))
         
-        # 2. Incrementa APENAS o passageiro (a corrida já foi contada na criação da carona)
+        # SOMA APENAS O PASSAGEIRO!
         cursor.execute("""
             UPDATE usuarios 
             SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1
@@ -512,7 +508,7 @@ def finalizar_solicitacao():
         """, (dados["motorista"],))
         
         conexao.commit()
-        return jsonify({"mensagem": "Passageiro finalizado com sucesso!"}), 200
+        return jsonify({"mensagem": "Passageiro finalizado!"}), 200
     except Exception as e:
         conexao.rollback()
         return jsonify({"erro": str(e)}), 500
