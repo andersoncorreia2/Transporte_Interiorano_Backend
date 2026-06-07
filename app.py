@@ -369,6 +369,13 @@ def criar_carona():
     """, (dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
           dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
           dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
+    
+    # 2. Adicione este bloco de volta para atualizar o total de vagas ofertadas
+    cursor.execute("""
+        UPDATE usuarios 
+        SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
+        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
+    """, (int(dados["vagas"]), dados["motorista"]))
      
     conexao.commit()
     cursor.close()
