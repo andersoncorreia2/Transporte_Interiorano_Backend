@@ -369,18 +369,11 @@ def criar_carona():
     """, (dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
           dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
           dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
-    
-    # 2. Incrementa a CORRIDA apenas 1 vez, aqui na criação!
-    cursor.execute("""
-        UPDATE usuarios 
-        SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
-        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-    """, (dados["motorista"],))
-    
+     
     conexao.commit()
     cursor.close()
     conexao.close()
-    return jsonify({"mensagem": "Evento criado e corrida contabilizada!"}), 201
+    return jsonify({"mensagem": "Evento criado!"}), 201
 
 @app.route("/caronas/<int:id_carona>", methods=["DELETE"])
 def deletar_carona(id_carona):
@@ -495,20 +488,51 @@ def cancelar_solicitacao(id_solicitacao):
 @app.route("/finalizar_solicitacao", methods=["POST"])
 def finalizar_solicitacao():
     dados = request.get_json()
+    # Espera: {"solicitacao_id": id, "motorista": nome_motorista, "passageiro_cpf": cpf, "carona_id": id}
     conexao = conectar_banco()
-    cursor = conexao.cursor()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
     try:
+        # 1. Finaliza a solicitação
         cursor.execute("UPDATE solicitacoes SET status = 'Finalizado' WHERE id = %s", (dados["solicitacao_id"],))
         
-        # SOMA APENAS O PASSAGEIRO!
+        # 2. O passageiro ganha +1 corrida (IDENTIFICADO PELO CPF)
+        cursor.execute("""
+            UPDATE usuarios 
+            SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
+            WHERE cpf = %s
+        """, (dados["passageiro_cpf"],))
+        
+        # 3. O motorista ganha +1 passageiro (pelo nome, como já está)
         cursor.execute("""
             UPDATE usuarios 
             SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1
             WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
         """, (dados["motorista"],))
+
+        # 4. Verifica se este foi o ÚLTIMO passageiro do evento
+        cursor.execute("""
+            SELECT COUNT(*) as pendentes 
+            FROM solicitacoes 
+            WHERE carona_id = %s AND status != 'Finalizado'
+        """, (dados["carona_id"],))
+        
+        pendentes = cursor.fetchone()["pendentes"]
+        
+        # 5. Se não houver mais ninguém, encerra a carona e dá o ponto de corrida ao motorista
+        if pendentes == 0:
+            # Ponto de corrida para o motorista
+            cursor.execute("""
+                UPDATE usuarios 
+                SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
+                WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
+            """, (dados["motorista"],))
+            
+            # Opcional: marca a carona como finalizada no banco
+            cursor.execute("UPDATE caronas SET status = 'Finalizado' WHERE id = %s", (dados["carona_id"],))
         
         conexao.commit()
-        return jsonify({"mensagem": "Passageiro finalizado!"}), 200
+        return jsonify({"mensagem": "Viagem finalizada com sucesso!"}), 200
     except Exception as e:
         conexao.rollback()
         return jsonify({"erro": str(e)}), 500
