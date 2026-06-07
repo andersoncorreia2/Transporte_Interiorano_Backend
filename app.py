@@ -434,10 +434,12 @@ def listar_solicitacoes():
 def pedir_carona():
     dados = request.get_json()
     carona_id = int(dados["carona_id"])
+    cpf_passageiro = dados.get("passageiro_cpf") # Captura o CPF enviado pelo Android
+    
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-
-    # 1. Busca a carona E o fcm_token do motorista (o motorista é guardado pelo nome)
+    
+    # 1. Busca a carona E o fcm_token do motorista
     cursor.execute("""
         SELECT c.vagas, u.fcm_token 
         FROM caronas c 
@@ -448,8 +450,11 @@ def pedir_carona():
 
     # 2. Se a carona existir e tiver vaga, registra e notifica
     if resultado and int(resultado["vagas"]) > 0:
-        cursor.execute("INSERT INTO solicitacoes (carona_id, passageiro, status, data_criacao) VALUES (%s, %s, %s, %s)", 
-               (carona_id, dados["passageiro"], "Pendente", datetime.now()))
+        cursor.execute("""
+            INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
+            VALUES (%s, %s, %s, %s, %s)
+        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
+        
         conexao.commit()
         
         # 3. Dispara a notificação se o motorista tiver um token salvo
@@ -547,21 +552,27 @@ def finalizar_solicitacao():
         cursor.close()
         conexao.close()
         
-@app.route("/historico/<passageiro>", methods=["GET"])
-def listar_historico_passageiro(passageiro):
+@app.route("/historico_cpf/<cpf>", methods=["GET"])
+def listar_historico_por_cpf(cpf):
+    # O CPF não costuma ter caracteres especiais, mas garantimos a limpeza
+    cpf_limpo = urllib.parse.unquote(cpf)
+    
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    # Busca solicitações finalizadas deste passageiro
+    
+    # Busca filtrando pelo CPF do passageiro
     cursor.execute("""
-        SELECT s.*, c.evento_nome, c.horario 
+        SELECT s.*, c.evento_nome, c.horario, s.passageiro_cpf 
         FROM solicitacoes s 
         JOIN caronas c ON s.carona_id = c.id 
-        WHERE s.passageiro = %s AND s.status = 'Finalizado'
-    """, (passageiro,))
+        WHERE s.passageiro_cpf = %s AND s.status = 'Finalizado'
+    """, (cpf_limpo,))
+    
     historico = cursor.fetchall()
     cursor.close()
     conexao.close()
-    return jsonify(historico)
+    
+    return jsonify(historico), 200
 
 # Se quiser uma rota para o motorista ver o histórico dele também:
 @app.route("/historico_motorista/<motorista>", methods=["GET"])
