@@ -540,24 +540,29 @@ def finalizar_solicitacao():
         
         pendentes = cursor.fetchone()["pendentes"]
         
-        # 5. Se não houver mais ninguém, encerra a carona e dá o ponto de corrida ao motorista
-        if pendentes == 0:
-            cursor.execute("""
-                UPDATE usuarios 
-                SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
-                WHERE cpf = %s
-            """, (info['motorista_cpf'],))
-            
+        # 5. VERIFICAÇÃO FINAL (Método Seguro)
+        cursor.execute("SELECT count(*) as count FROM solicitacoes WHERE carona_id = %s AND status ILIKE 'Finalizado'", (dados["carona_id"],))
+        finalizados = cursor.fetchone()['count']
+        
+        cursor.execute("SELECT count(*) as count FROM solicitacoes WHERE carona_id = %s", (dados["carona_id"],))
+        total = cursor.fetchone()['count']
+        
+        # 6. Se o total for igual ou maior ao número de finalizados, o evento acabou!
+        if total <= finalizados:
+            # Atualiza corrida do motorista
+            cursor.execute("UPDATE usuarios SET corridas_realizadas = corridas_realizadas + 1 WHERE cpf = %s", (info['motorista_cpf'],))
+            # Finaliza o evento
             cursor.execute("UPDATE caronas SET status = 'Finalizado' WHERE id = %s", (dados["carona_id"],))
+            print(f"DEBUG: Evento {dados['carona_id']} finalizado com sucesso.")
         
         conexao.commit()
-        return jsonify({"mensagem": "Viagem finalizada com sucesso!"}), 200
+        return jsonify({"mensagem": "Viagem finalizada!", "total": total, "finalizados": finalizados}), 200
     except Exception as e:
         # Se ocorrer QUALQUER erro (banco, conexão, dados faltando), 
         # o rollback desfaz qualquer alteração parcial para não corromper os dados
         conexao.rollback()
         print(f"❌ Erro na finalização: {e}") # Importante para você ver no log do Render
-        return jsonify({"erro": str(e)}), 600
+        return jsonify({"erro": str(e)}), 500
         
     finally:
         # Isso garante que a conexão com o banco seja SEMPRE fechada,
