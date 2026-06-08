@@ -500,36 +500,68 @@ def cancelar_solicitacao(id_solicitacao):
 @app.route("/finalizar_solicitacao", methods=["POST"])
 def finalizar_solicitacao():
     dados = request.get_json()
+    # Espera: {"solicitacao_id": id, "motorista": nome_motorista, "passageiro_cpf": cpf, "carona_id": id}
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 1. Finaliza a solicitação
+        # 1. Finaliza a solicitação e busca CPFs para garantir precisão
         cursor.execute("UPDATE solicitacoes SET status = 'Finalizado' WHERE id = %s", (dados["solicitacao_id"],))
         
-        # 2. Atualiza o passageiro usando o CPF que já vem do seu App (dados['passageiro_cpf'])
-        # Adicionamos um print para você ver no Log do Render se esse CPF está chegando mesmo
-        print(f"DEBUG: Atualizando passageiro CPF: {dados.get('passageiro_cpf')}")
+        # Busca o CPF do motorista e do passageiro para garantir a atualização correta
+        cursor.execute("""
+            SELECT s.passageiro_cpf, c.motorista_cpf 
+            FROM solicitacoes s
+            JOIN caronas c ON s.carona_id = c.id
+            WHERE s.id = %s
+        """, (dados["solicitacao_id"],))
+        info = cursor.fetchone()
         
+        # 2. O passageiro ganha +1 corrida (PELO CPF)
         cursor.execute("""
             UPDATE usuarios 
             SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
             WHERE cpf = %s
-        """, (dados.get("passageiro_cpf"),))
+        """, (info['passageiro_cpf'],))
         
-        # 3. Atualiza o motorista pelo nome (que já funciona no seu sistema)
+        # 3. O motorista ganha +1 passageiro conduzido (PELO CPF DO MOTORISTA)
         cursor.execute("""
             UPDATE usuarios 
             SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1
-            WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-        """, (dados["motorista"],))
+            WHERE cpf = %s
+        """, (info['motorista_cpf'],))
 
+        # 4. Verifica se este foi o ÚLTIMO passageiro do evento
+        cursor.execute("""
+            SELECT COUNT(*) as pendentes 
+            FROM solicitacoes 
+            WHERE carona_id = %s AND status != 'Finalizado'
+        """, (dados["carona_id"],))
+        
+        pendentes = cursor.fetchone()["pendentes"]
+        
+        # 5. Se não houver mais ninguém, encerra a carona e dá o ponto de corrida ao motorista
+        if pendentes == 0:
+            cursor.execute("""
+                UPDATE usuarios 
+                SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1
+                WHERE cpf = %s
+            """, (info['motorista_cpf'],))
+            
+            cursor.execute("UPDATE caronas SET status = 'Finalizado' WHERE id = %s", (dados["carona_id"],))
+        
         conexao.commit()
-        return jsonify({"mensagem": "Sucesso"}), 200
+        return jsonify({"mensagem": "Viagem finalizada com sucesso!"}), 200
     except Exception as e:
+        # Se ocorrer QUALQUER erro (banco, conexão, dados faltando), 
+        # o rollback desfaz qualquer alteração parcial para não corromper os dados
         conexao.rollback()
-        return jsonify({"erro": str(e)}), 500
+        print(f"❌ Erro na finalização: {e}") # Importante para você ver no log do Render
+        return jsonify({"erro": str(e)}), 600
+        
     finally:
+        # Isso garante que a conexão com o banco seja SEMPRE fechada,
+        # evitando que o servidor pare de aceitar novos pedidos por falta de conexões.
         cursor.close()
         conexao.close()
         
