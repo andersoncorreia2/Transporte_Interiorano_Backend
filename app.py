@@ -374,8 +374,10 @@ def criar_carona():
     cursor.execute("""
         UPDATE usuarios 
         SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
-        WHERE TRIM(LOWER(nome)) = TRIM(LOWER(%s))
-    """, (int(dados["vagas"]), dados["motorista"]))
+        WHERE cpf = %s
+    """, (int(dados["vagas"]), dados["motorista_cpf"]))
+    
+    print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
      
     conexao.commit()
     cursor.close()
