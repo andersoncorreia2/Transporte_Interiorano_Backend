@@ -117,6 +117,17 @@ def criar_tabelas():
                 status TEXT
             )
         """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS motoristas_online (
+                cpf TEXT PRIMARY KEY REFERENCES usuarios(cpf) ON DELETE CASCADE,
+                nome TEXT NOT NULL,
+                latitude DOUBLE PRECISION NOT NULL,
+                longitude DOUBLE PRECISION NOT NULL,
+                status_disponibilidade TEXT DEFAULT 'Online',
+                ultima_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")       
         
