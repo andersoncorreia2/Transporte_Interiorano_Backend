@@ -362,23 +362,14 @@ def criar_carona():
     conexao = conectar_banco()
     cursor = conexao.cursor()
     
-    # 1. Insere a carona
+    # Insere a carona
     cursor.execute("""
         INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
           dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
           dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
-    
-    # 2. Adicione este bloco de volta para atualizar o total de vagas ofertadas
-    #cursor.execute("""
-        #UPDATE usuarios 
-        #SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
-        #WHERE cpf = %s
-    #""", (int(dados["vagas"]), dados["motorista_cpf"]))
-    
-    #print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
-     
+        
     conexao.commit()
     cursor.close()
     conexao.close()
