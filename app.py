@@ -371,13 +371,13 @@ def criar_carona():
           dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
     
     # 2. Adicione este bloco de volta para atualizar o total de vagas ofertadas
-    cursor.execute("""
-        UPDATE usuarios 
-        SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
-        WHERE cpf = %s
-    """, (int(dados["vagas"]), dados["motorista_cpf"]))
+    #cursor.execute("""
+        #UPDATE usuarios 
+        #SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
+        #WHERE cpf = %s
+    #""", (int(dados["vagas"]), dados["motorista_cpf"]))
     
-    print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
+    #print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
      
     conexao.commit()
     cursor.close()
@@ -588,7 +588,7 @@ def listar_historico_por_cpf(cpf):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Busca filtrando pelo CPF do passageiro
+    # Busca filtrando pelo CPF do passageiro                         
     cursor.execute("""
         SELECT s.*, c.evento_nome, c.horario, s.passageiro_cpf 
         FROM solicitacoes s 
