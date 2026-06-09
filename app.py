@@ -611,6 +611,33 @@ def listar_historico_motorista_cpf(cpf):
     conexao.close()
     return jsonify(historico)
 
+@app.route("/atualizar_localizacao", methods=["POST"])
+def atualizar_localizacao():
+    dados = request.get_json()
+    # Espera receber: {"cpf": "...", "nome": "...", "latitude": 0.0, "longitude": 0.0, "status": "Online"}
+    
+    conexao = conectar_banco()
+    cursor = conexao.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO motoristas_online (cpf, nome, latitude, longitude, status_disponibilidade, ultima_atualizacao)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (cpf) DO UPDATE 
+            SET latitude = EXCLUDED.latitude, 
+                longitude = EXCLUDED.longitude, 
+                status_disponibilidade = EXCLUDED.status_disponibilidade,
+                ultima_atualizacao = CURRENT_TIMESTAMP
+        """, (dados["cpf"], dados["nome"], dados["latitude"], dados["longitude"], dados["status"]))
+        
+        conexao.commit()
+        return jsonify({"mensagem": "Localização atualizada!"}), 200
+    except Exception as e:
+        conexao.rollback()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
     porta = int(os.environ.get("PORT", 5000))
