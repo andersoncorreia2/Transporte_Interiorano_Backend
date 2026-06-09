@@ -512,7 +512,7 @@ def finalizar_solicitacao():
         
         # Busca o CPF do motorista e do passageiro para garantir a atualização correta
         cursor.execute("""
-            SELECT s.passageiro_cpf, c.motorista_cpf 
+            SELECT s.passageiro_cpf, c.motorista_cpf, c.vagas 
             FROM solicitacoes s
             JOIN caronas c ON s.carona_id = c.id
             WHERE s.id = %s
