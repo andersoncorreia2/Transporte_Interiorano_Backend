@@ -120,7 +120,7 @@ def criar_tabelas():
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS motoristas_online (
-                cpf TEXT PRIMARY KEY REFERENCES usuarios(cpf) ON DELETE CASCADE,
+                cpf TEXT PRIMARY KEY,
                 nome TEXT NOT NULL,
                 latitude DOUBLE PRECISION NOT NULL,
                 longitude DOUBLE PRECISION NOT NULL,
