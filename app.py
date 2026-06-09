@@ -625,7 +625,7 @@ def listar_historico_motorista_cpf(cpf):
 @app.route("/atualizar_localizacao", methods=["POST"])
 def atualizar_localizacao():
     dados = request.get_json()
-    # Espera receber: {"cpf": "...", "nome": "...", "latitude": 0.0, "longitude": 0.0, "status": "Online"}
+    print(f"DEBUG_DADOS: {dados}")
     
     conexao = conectar_banco()
     cursor = conexao.cursor()
@@ -644,6 +644,7 @@ def atualizar_localizacao():
         return jsonify({"mensagem": "Localização atualizada!"}), 200
     except Exception as e:
         conexao.rollback()
+        print(f"❌ ERRO GRAVE NO BANCO: {e}") # Adicione esse print!
         return jsonify({"erro": str(e)}), 500
     finally:
         cursor.close()
