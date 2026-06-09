@@ -603,20 +603,22 @@ def listar_historico_por_cpf(cpf):
     return jsonify(historico), 200
 
 # Se quiser uma rota para o motorista ver o histórico dele também:
-@app.route("/historico_motorista/<motorista>", methods=["GET"])
-def listar_historico_motorista(motorista):
+@app.route("/historico_motorista_cpf/<cpf>", methods=["GET"])
+def listar_historico_motorista_cpf(cpf):
+    cpf_limpo = urllib.parse.unquote(cpf)
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    # Busca pelo CPF do motorista gravado na carona
     cursor.execute("""
-        SELECT s.*, c.evento_nome, c.horario 
+        SELECT s.*, c.evento_nome, c.horario, c.motorista_cpf
         FROM solicitacoes s 
         JOIN caronas c ON s.carona_id = c.id 
-        WHERE c.motorista = %s AND s.status = 'Finalizado'
-    """, (motorista,))
+        WHERE c.motorista_cpf = %s AND s.status = 'Finalizado'
+    """, (cpf_limpo,))
     historico = cursor.fetchall()
     cursor.close()
     conexao.close()
-    return jsonify(historico)      
+    return jsonify(historico)
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
