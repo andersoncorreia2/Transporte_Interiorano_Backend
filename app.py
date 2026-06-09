@@ -555,6 +555,14 @@ def finalizar_solicitacao():
             cursor.execute("UPDATE usuarios SET corridas_realizadas = corridas_realizadas + 1 WHERE cpf = %s", (info['motorista_cpf'],))
             # Finaliza o evento
             cursor.execute("UPDATE caronas SET status = 'Finalizado' WHERE id = %s", (dados["carona_id"],))
+            
+            # ATUALIZAÇÃO DAS VAGAS OFERTADAS (Aqui entra o seu novo requisito)
+            cursor.execute("""
+                UPDATE usuarios 
+                SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
+                WHERE cpf = %s
+            """, (int(info['vagas']), info['motorista_cpf']))
+            
             print(f"DEBUG: Evento {dados['carona_id']} finalizado com sucesso.")
         
         conexao.commit()
