@@ -648,6 +648,17 @@ def atualizar_localizacao():
     finally:
         cursor.close()
         conexao.close()
+        
+# 🆕 ROTA PARA O MAPA BUSCAR OS MOTORISTAS
+@app.route("/motoristas_online", methods=["GET"])
+def listar_motoristas_online():
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM motoristas_online")
+    motoristas = cursor.fetchall()
+    cursor.close()
+    conexao.close()
+    return jsonify(motoristas), 200      
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
