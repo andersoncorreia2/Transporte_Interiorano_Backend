@@ -641,49 +641,40 @@ def listar_motoristas_online():
 @app.route("/solicitar_emergencia", methods=["POST"])
 def solicitar_emergencia():
     dados = request.get_json()
-    lat_passageiro = dados['lat']
-    lon_passageiro = dados['lon']
+    lat_passageiro = float(dados['lat'])
+    lon_passageiro = float(dados['lon'])
     cpf_passageiro = dados['passageiro_cpf']
-    nome_passageiro = dados.get('nome', 'Passageiro')
     
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 1. Busca o motorista
+    # 1. Busca qualquer motorista ONLINE, ignorando o cálculo complexo de distância por enquanto
+    # para testar se o motorista aparece.
     cursor.execute("""
-        SELECT cpf, nome, fcm_token
+        SELECT cpf, nome 
         FROM motoristas_online
         WHERE status_disponibilidade = 'Online'
-          AND ultima_atualizacao > NOW() - INTERVAL '1 minute'
-        ORDER BY (latitude - %s)^2 + (longitude - %s)^2 ASC
+        AND ultima_atualizacao > NOW() - INTERVAL '5 minutes'
         LIMIT 1
-    """, (lat_passageiro, lon_passageiro))
+    """)
     
     motorista = cursor.fetchone()
     
     if motorista:
-        # 2. GRAVA NO BANCO (Para aparecer na lista do motorista)
+        # 2. Grava a solicitação
         cursor.execute("""
             INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao, tipo) 
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (0, nome_passageiro, cpf_passageiro, "Pendente", datetime.now(), "Emergencia"))
+        """, (0, "Passageiro", cpf_passageiro, "Pendente", datetime.now(), "Emergencia"))
         conexao.commit()
         
-        # 3. Notifica
-        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (motorista['cpf'],))
-        token_data = cursor.fetchone()
-        
-        if token_data and token_data['fcm_token']:
-            enviar_notificacao(token_data['fcm_token'], "🚨 EMERGÊNCIA!", f"{nome_passageiro} precisa de você!")
-            
         cursor.close()
         conexao.close()
-        return jsonify({"mensagem": "Motorista notificado!", "nome": motorista['nome']}), 200
+        return jsonify({"mensagem": "Motorista encontrado!", "nome": motorista['nome']}), 200
     
     cursor.close()
     conexao.close()
     return jsonify({"mensagem": "Nenhum motorista disponível."}), 404
-
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
     porta = int(os.environ.get("PORT", 5000))
