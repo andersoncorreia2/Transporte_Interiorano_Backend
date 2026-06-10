@@ -659,7 +659,15 @@ def listar_motoristas_online():
     motoristas = cursor.fetchall()
     cursor.close()
     conexao.close()
-    return jsonify(motoristas), 200      
+    return jsonify(motoristas), 200
+
+# --- ROTA PARA CORRIDA IMEDIATA (MODO UBER) ---
+@app.route("/solicitar_emergencia", methods=["POST"])
+def solicitar_emergencia():
+    dados = request.get_json()
+    # Apenas logamos a emergência para começar
+    print(f"🚨 Emergência: Passageiro {dados['passageiro_cpf']} pediu corrida em {dados['lat']}, {dados['lon']}")
+    return jsonify({"mensagem": "Solicitação recebida"}), 201     
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
