@@ -26,11 +26,20 @@ else:
     print("⚠️ AVISO: FIREBASE_CONFIG_JSON não encontrada nas variáveis de ambiente!")
 
 def conectar_banco():
-    DATABASE_URL = "postgresql://transporte_db_mc40_user:e1JFSWlEYZqmdecHqMUM2ZMxM6h43Zbb@dpg-d893okfavr4c739abl50-a.oregon-postgres.render.com/transporte_db_mc40"
+    # Buscamos a URL de uma variável de ambiente, nunca deixando a senha exposta
+    DATABASE_URL = os.environ.get("DATABASE_URL")
+    
+    if not DATABASE_URL:
+        # Se o Render não tiver a configuração, o servidor avisa no log
+        print("❌ ERRO: Variável DATABASE_URL não encontrada nas variáveis de ambiente!")
+        return None
+        
     try:
+        # Tenta conectar usando a string segura
         conexao = psycopg2.connect(DATABASE_URL)
         return conexao
     except Exception as e:
+        # Se a conexão falhar (ex: internet instável), ele loga o erro sem travar tudo
         print(f"Erro ao conectar no banco: {e}")
         return None
 
@@ -98,6 +107,10 @@ def criar_tabelas():
                 status TEXT DEFAULT 'Aberta'
             )
         """)
+        
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'Programada';")
+        # Isso garante que o CPF do passageiro exista na tabela de solicitações
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS passageiro_cpf TEXT;")
         # E garanta que a coluna exista caso a tabela já tivesse sido criada antes:
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Aberta';")
         
@@ -144,7 +157,7 @@ def criar_tabelas():
         cursor.close()
         conexao.close()
 
-criar_tabelas()
+#criar_tabelas()
 
 @app.route("/usuarios", methods=["POST"])
 def cadastrar_usuario():
@@ -397,43 +410,6 @@ def deletar_carona(id_carona):
     conexao.close()
     return jsonify({"mensagem": "Evento e solicitações excluídos!"}), 200
 
-@app.route("/solicitacoes", methods=["GET"])
-def listar_solicitacoes():
-    conexao = conectar_banco()
-    cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    
-    # 1. A MÁGICA: Apaga os expirados do banco antes de listar!
-    cursor.execute("DELETE FROM solicitacoes WHERE status = 'Expirado'")
-    conexao.commit()
-
-    # 2. Busca tudo que sobrou
-    cursor.execute("SELECT * FROM solicitacoes WHERE status != 'Finalizado'")
-    solicitacoes_do_cofre = cursor.fetchall()
-    
-    lista_solicitacoes = []
-    agora = datetime.now()
-
-    for sol in solicitacoes_do_cofre:
-        status = sol["status"]
-        
-        # Lógica de expiração (se for Pendente e passou de 15 min)
-        if status == "Pendente" and sol["data_criacao"]:
-            if (agora - sol["data_criacao"]) > timedelta(minutes=15):
-                status = "Expirado"
-                cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status, sol["id"]))
-                conexao.commit()
-
-        lista_solicitacoes.append({
-            "id": sol["id"], 
-            "carona_id": sol["carona_id"], 
-            "passageiro": sol["passageiro"], 
-            "status": status
-        })
-    
-    cursor.close()
-    conexao.close()
-    return jsonify(lista_solicitacoes), 200
-
 @app.route("/solicitacoes", methods=["POST"])
 def pedir_carona():
     dados = request.get_json()
@@ -455,9 +431,9 @@ def pedir_carona():
     # 2. Se a carona existir e tiver vaga, registra e notifica
     if resultado and int(resultado["vagas"]) > 0:
         cursor.execute("""
-            INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
-            VALUES (%s, %s, %s, %s, %s)
-        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
+    INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao, tipo) 
+    VALUES (%s, %s, %s, %s, %s, %s)
+""", (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now(), dados.get("tipo", "Programada")))
         
         conexao.commit()
         
@@ -661,13 +637,52 @@ def listar_motoristas_online():
     conexao.close()
     return jsonify(motoristas), 200
 
-# --- ROTA PARA CORRIDA IMEDIATA (MODO UBER) ---
+# --- ROTA PARA CORRIDA IMEDIATA (MODO UBER) - VERSÃO SEGURA ---
 @app.route("/solicitar_emergencia", methods=["POST"])
 def solicitar_emergencia():
     dados = request.get_json()
-    # Apenas logamos a emergência para começar
-    print(f"🚨 Emergência: Passageiro {dados['passageiro_cpf']} pediu corrida em {dados['lat']}, {dados['lon']}")
-    return jsonify({"mensagem": "Solicitação recebida"}), 201     
+    lat_passageiro = dados['lat']
+    lon_passageiro = dados['lon']
+    cpf_passageiro = dados['passageiro_cpf']
+    nome_passageiro = dados.get('nome', 'Passageiro')
+    
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    # 1. Busca o motorista
+    cursor.execute("""
+        SELECT cpf, nome, fcm_token
+        FROM motoristas_online
+        WHERE status_disponibilidade = 'Online'
+          AND ultima_atualizacao > NOW() - INTERVAL '1 minute'
+        ORDER BY (latitude - %s)^2 + (longitude - %s)^2 ASC
+        LIMIT 1
+    """, (lat_passageiro, lon_passageiro))
+    
+    motorista = cursor.fetchone()
+    
+    if motorista:
+        # 2. GRAVA NO BANCO (Para aparecer na lista do motorista)
+        cursor.execute("""
+            INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao, tipo) 
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (0, nome_passageiro, cpf_passageiro, "Pendente", datetime.now(), "Emergencia"))
+        conexao.commit()
+        
+        # 3. Notifica
+        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (motorista['cpf'],))
+        token_data = cursor.fetchone()
+        
+        if token_data and token_data['fcm_token']:
+            enviar_notificacao(token_data['fcm_token'], "🚨 EMERGÊNCIA!", f"{nome_passageiro} precisa de você!")
+            
+        cursor.close()
+        conexao.close()
+        return jsonify({"mensagem": "Motorista notificado!", "nome": motorista['nome']}), 200
+    
+    cursor.close()
+    conexao.close()
+    return jsonify({"mensagem": "Nenhum motorista disponível."}), 404
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
