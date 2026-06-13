@@ -26,20 +26,11 @@ else:
     print("⚠️ AVISO: FIREBASE_CONFIG_JSON não encontrada nas variáveis de ambiente!")
 
 def conectar_banco():
-    # Buscamos a URL de uma variável de ambiente, nunca deixando a senha exposta
-    DATABASE_URL = os.environ.get("DATABASE_URL")
-    
-    if not DATABASE_URL:
-        # Se o Render não tiver a configuração, o servidor avisa no log
-        print("❌ ERRO: Variável DATABASE_URL não encontrada nas variáveis de ambiente!")
-        return None
-        
+    DATABASE_URL = "postgresql://transporte_db_mc40_user:e1JFSWlEYZqmdecHqMUM2ZMxM6h43Zbb@dpg-d893okfavr4c739abl50-a.oregon-postgres.render.com/transporte_db_mc40"
     try:
-        # Tenta conectar usando a string segura
         conexao = psycopg2.connect(DATABASE_URL)
         return conexao
     except Exception as e:
-        # Se a conexão falhar (ex: internet instável), ele loga o erro sem travar tudo
         print(f"Erro ao conectar no banco: {e}")
         return None
 
@@ -107,10 +98,6 @@ def criar_tabelas():
                 status TEXT DEFAULT 'Aberta'
             )
         """)
-        
-        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'Programada';")
-        # Isso garante que o CPF do passageiro exista na tabela de solicitações
-        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS passageiro_cpf TEXT;")
         # E garanta que a coluna exista caso a tabela já tivesse sido criada antes:
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Aberta';")
         
@@ -130,17 +117,6 @@ def criar_tabelas():
                 status TEXT
             )
         """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS motoristas_online (
-                cpf TEXT PRIMARY KEY,
-                nome TEXT NOT NULL,
-                latitude DOUBLE PRECISION NOT NULL,
-                longitude DOUBLE PRECISION NOT NULL,
-                status_disponibilidade TEXT DEFAULT 'Online',
-                ultima_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
 
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")       
         
@@ -157,7 +133,7 @@ def criar_tabelas():
         cursor.close()
         conexao.close()
 
-#criar_tabelas()
+criar_tabelas()
 
 @app.route("/usuarios", methods=["POST"])
 def cadastrar_usuario():
@@ -386,14 +362,23 @@ def criar_carona():
     conexao = conectar_banco()
     cursor = conexao.cursor()
     
-    # Insere a carona
+    # 1. Insere a carona
     cursor.execute("""
         INSERT INTO caronas (evento_nome, cidade_origem, endereco_origem, cidade_destino, endereco_destino, horario, vagas, motorista, motorista_cpf)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (dados["evento_nome"], dados["cidade_origem"], dados["endereco_origem"], 
           dados["cidade_destino"], dados["endereco_destino"], dados["horario"], 
           dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
-        
+    
+    # 2. Adicione este bloco de volta para atualizar o total de vagas ofertadas
+    cursor.execute("""
+        UPDATE usuarios 
+        SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
+        WHERE cpf = %s
+    """, (int(dados["vagas"]), dados["motorista_cpf"]))
+    
+    print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
+     
     conexao.commit()
     cursor.close()
     conexao.close()
@@ -409,6 +394,43 @@ def deletar_carona(id_carona):
     cursor.close()
     conexao.close()
     return jsonify({"mensagem": "Evento e solicitações excluídos!"}), 200
+
+@app.route("/solicitacoes", methods=["GET"])
+def listar_solicitacoes():
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    # 1. A MÁGICA: Apaga os expirados do banco antes de listar!
+    cursor.execute("DELETE FROM solicitacoes WHERE status = 'Expirado'")
+    conexao.commit()
+
+    # 2. Busca tudo que sobrou
+    cursor.execute("SELECT * FROM solicitacoes WHERE status != 'Finalizado'")
+    solicitacoes_do_cofre = cursor.fetchall()
+    
+    lista_solicitacoes = []
+    agora = datetime.now()
+
+    for sol in solicitacoes_do_cofre:
+        status = sol["status"]
+        
+        # Lógica de expiração (se for Pendente e passou de 15 min)
+        if status == "Pendente" and sol["data_criacao"]:
+            if (agora - sol["data_criacao"]) > timedelta(minutes=15):
+                status = "Expirado"
+                cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status, sol["id"]))
+                conexao.commit()
+
+        lista_solicitacoes.append({
+            "id": sol["id"], 
+            "carona_id": sol["carona_id"], 
+            "passageiro": sol["passageiro"], 
+            "status": status
+        })
+    
+    cursor.close()
+    conexao.close()
+    return jsonify(lista_solicitacoes), 200
 
 @app.route("/solicitacoes", methods=["POST"])
 def pedir_carona():
@@ -431,9 +453,9 @@ def pedir_carona():
     # 2. Se a carona existir e tiver vaga, registra e notifica
     if resultado and int(resultado["vagas"]) > 0:
         cursor.execute("""
-    INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao, tipo) 
-    VALUES (%s, %s, %s, %s, %s, %s)
-""", (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now(), dados.get("tipo", "Programada")))
+            INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
+            VALUES (%s, %s, %s, %s, %s)
+        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
         
         conexao.commit()
         
@@ -566,7 +588,7 @@ def listar_historico_por_cpf(cpf):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Busca filtrando pelo CPF do passageiro                         
+    # Busca filtrando pelo CPF do passageiro
     cursor.execute("""
         SELECT s.*, c.evento_nome, c.horario, s.passageiro_cpf 
         FROM solicitacoes s 
@@ -581,100 +603,21 @@ def listar_historico_por_cpf(cpf):
     return jsonify(historico), 200
 
 # Se quiser uma rota para o motorista ver o histórico dele também:
-@app.route("/historico_motorista_cpf/<cpf>", methods=["GET"])
-def listar_historico_motorista_cpf(cpf):
-    cpf_limpo = urllib.parse.unquote(cpf)
+@app.route("/historico_motorista/<motorista>", methods=["GET"])
+def listar_historico_motorista(motorista):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    # Busca pelo CPF do motorista gravado na carona
     cursor.execute("""
-        SELECT s.*, c.evento_nome, c.horario, c.motorista_cpf
+        SELECT s.*, c.evento_nome, c.horario 
         FROM solicitacoes s 
         JOIN caronas c ON s.carona_id = c.id 
-        WHERE c.motorista_cpf = %s AND s.status = 'Finalizado'
-    """, (cpf_limpo,))
+        WHERE c.motorista = %s AND s.status = 'Finalizado'
+    """, (motorista,))
     historico = cursor.fetchall()
     cursor.close()
     conexao.close()
-    return jsonify(historico)
+    return jsonify(historico)      
 
-@app.route("/atualizar_localizacao", methods=["POST"])
-def atualizar_localizacao():
-    dados = request.get_json()
-    print(f"DEBUG_DADOS: {dados}")
-    
-    conexao = conectar_banco()
-    cursor = conexao.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO motoristas_online (cpf, nome, latitude, longitude, status_disponibilidade, ultima_atualizacao)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (cpf) DO UPDATE 
-            SET latitude = EXCLUDED.latitude, 
-                longitude = EXCLUDED.longitude, 
-                status_disponibilidade = EXCLUDED.status_disponibilidade,
-                ultima_atualizacao = CURRENT_TIMESTAMP
-        """, (dados["cpf"], dados["nome"], dados["latitude"], dados["longitude"], dados["status"]))
-        
-        conexao.commit()
-        return jsonify({"mensagem": "Localização atualizada!"}), 200
-    except Exception as e:
-        conexao.rollback()
-        print(f"❌ ERRO GRAVE NO BANCO: {e}") # Adicione esse print!
-        return jsonify({"erro": str(e)}), 500
-    finally:
-        cursor.close()
-        conexao.close()
-        
-# 🆕 ROTA PARA O MAPA BUSCAR OS MOTORISTAS
-@app.route("/motoristas_online", methods=["GET"])
-def listar_motoristas_online():
-    conexao = conectar_banco()
-    cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM motoristas_online")
-    motoristas = cursor.fetchall()
-    cursor.close()
-    conexao.close()
-    return jsonify(motoristas), 200
-
-# --- ROTA PARA CORRIDA IMEDIATA (MODO UBER) - VERSÃO SEGURA ---
-@app.route("/solicitar_emergencia", methods=["POST"])
-def solicitar_emergencia():
-    dados = request.get_json()
-    lat_passageiro = float(dados['lat'])
-    lon_passageiro = float(dados['lon'])
-    cpf_passageiro = dados['passageiro_cpf']
-    
-    conexao = conectar_banco()
-    cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    
-    # 1. Busca qualquer motorista ONLINE, ignorando o cálculo complexo de distância por enquanto
-    # para testar se o motorista aparece.
-    cursor.execute("""
-        SELECT cpf, nome 
-        FROM motoristas_online
-        WHERE status_disponibilidade = 'Online'
-        AND ultima_atualizacao > NOW() - INTERVAL '5 minutes'
-        LIMIT 1
-    """)
-    
-    motorista = cursor.fetchone()
-    
-    if motorista:
-        # 2. Grava a solicitação
-        cursor.execute("""
-            INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao, tipo) 
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (0, "Passageiro", cpf_passageiro, "Pendente", datetime.now(), "Emergencia"))
-        conexao.commit()
-        
-        cursor.close()
-        conexao.close()
-        return jsonify({"mensagem": "Motorista encontrado!", "nome": motorista['nome']}), 200
-    
-    cursor.close()
-    conexao.close()
-    return jsonify({"mensagem": "Nenhum motorista disponível."}), 404
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
     porta = int(os.environ.get("PORT", 5000))
