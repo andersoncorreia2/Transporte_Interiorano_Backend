@@ -675,7 +675,7 @@ def finalizar_solicitacao():
         conexao.close()
         
 @app.route("/historico_cpf/<cpf>", methods=["GET"])
-def listar_historico_por_cpf(cpf):
+def listar_historico_motorista_por_cpf(cpf):
     # O CPF não costuma ter caracteres especiais, mas garantimos a limpeza
     cpf_limpo = urllib.parse.unquote(cpf)
     
@@ -710,7 +710,28 @@ def listar_historico_motorista(motorista):
     historico = cursor.fetchall()
     cursor.close()
     conexao.close()
-    return jsonify(historico)      
+    return jsonify(historico)
+
+# Mantenha a rota por nome se quiser, e adicione esta logo abaixo:
+@app.route("/historico_motorista_cpf/<cpf>", methods=["GET"])
+def listar_historico_motorista_por_cpf(cpf):
+    cpf_limpo = urllib.parse.unquote(cpf)
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    # 🟢 CORRIGIDO: Busca no banco fazendo o JOIN e filtrando estritamente pelo CPF do motorista
+    cursor.execute("""
+        SELECT s.*, c.evento_nome, c.horario, s.passageiro_cpf 
+        FROM solicitacoes s 
+        JOIN caronas c ON s.carona_id = c.id 
+        WHERE c.motorista_cpf = %s AND s.status = 'Finalizado'
+    """, (cpf_limpo,))
+    
+    historico = cursor.fetchall()
+    cursor.close()
+    conexao.close()
+    
+    return jsonify(historico), 200      
 
 if __name__ == "__main__":
     print("🚀 Foguete Transporte Interiorano online com Endereços Completos!")
