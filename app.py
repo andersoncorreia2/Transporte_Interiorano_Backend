@@ -8,6 +8,9 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import json
 from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
+import jwt
+from functools import wraps
 
 app = Flask(__name__)
 
@@ -25,8 +28,40 @@ if firebase_config_str:
 else:
     print("⚠️ AVISO: FIREBASE_CONFIG_JSON não encontrada nas variáveis de ambiente!")
 
+# 🟢 CONFIGURAÇÃO DO JWT
+# Em produção no Render, configure uma chave aleatória longa na variável 'JWT_SECRET'
+JWT_SECRET = os.environ.get("JWT_SECRET", "uma_chave_secreta_super_robusta_e_longa_para_desenvolvimento")
+
+# Decorador de Segurança para proteger as rotas
+def token_requerido(f):    
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        
+        # O token deve vir no cabeçalho Authorization no formato: Bearer <TOKEN>
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            if auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1]
+
+        if not token:
+            return jsonify({"erro": "Token de autenticação ausente!"}), 401
+
+        try:
+            # Decodifica e valida a assinatura digital e o tempo de expiração do token
+            dados_token = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            # Injeta o utilizador logado no contexto da requisição
+            request.usuario_logado = dados_token
+        except jwt.ExpiredSignatureError:
+            return jsonify({"erro": "A sua sessão expirou! Faça login novamente."}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"erro": "Token inválido ou corrompido!"}), 401
+
+        return f(*args, **kwargs)
+    return decorated
+
 def conectar_banco():
-    DATABASE_URL = "postgresql://transporte_db_mc40_user:e1JFSWlEYZqmdecHqMUM2ZMxM6h43Zbb@dpg-d893okfavr4c739abl50-a.oregon-postgres.render.com/transporte_db_mc40"
+    DATABASE_URL = os.environ.get("DATABASE_URL")
     try:
         conexao = psycopg2.connect(DATABASE_URL)
         return conexao
@@ -141,6 +176,10 @@ def cadastrar_usuario():
     conexao = conectar_banco()
     cursor = conexao.cursor()
     try:
+        
+        # Gera um hash seguro e único baseado em PBKDF2 com salt aleatório
+        senha_criptografada = generate_password_hash(dados["senha"])
+        
         cursor.execute("""
             INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -160,8 +199,14 @@ def cadastrar_usuario():
         conexao.close()
 
 @app.route("/usuarios/<email_seguro>", methods=["PUT"])
+@token_requerido # 🛡️ Só entra se tiver token válido
 def atualizar_usuario(email_seguro):
     email_real = urllib.parse.unquote(email_seguro)
+    
+    # PROTEÇÃO BOLA/IDOR: O utilizador só pode alterar os seus próprios dados!
+    if request.usuario_logado["email"] != email_real:
+        return jsonify({"erro": "Ação não autorizada! Você não tem permissão para alterar este perfil."}), 403
+
     dados = request.get_json()
     conexao = conectar_banco()
     cursor = conexao.cursor()
@@ -178,7 +223,7 @@ def atualizar_usuario(email_seguro):
             email_real
         ))
         conexao.commit()
-        return jsonify({"mensagem": "Dados updated!"}), 200
+        return jsonify({"mensagem": "Dados atualizados com sucesso!"}), 200
     finally:
         cursor.close()
         conexao.close()
@@ -247,10 +292,16 @@ def buscar_por_cpf(cpf):
         return jsonify({"corridas_realizadas": 0, "passageiros_conduzidos": 0}), 200
 
 @app.route("/usuarios/<email_seguro>", methods=["DELETE"])
+@token_requerido # 🛡️ Só entra se tiver token válido
 def excluir_conta(email_seguro):
     email_real = urllib.parse.unquote(email_seguro)
+    
+    # PROTEÇÃO BOLA/IDOR: O utilizador só pode excluir a sua própria conta!
+    if request.usuario_logado["email"] != email_real:
+        return jsonify({"erro": "Ação não autorizada! Você não pode excluir a conta de terceiros."}), 403
+
     conexao = conectar_banco()
-    cursor = conexao.cursor(cursor_factory=RealDictCursor) 
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
     cursor.execute("SELECT nome FROM usuarios WHERE email = %s", (email_real,))
     usuario = cursor.fetchone()
@@ -276,28 +327,47 @@ def login():
     dados = request.get_json()
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    # Buscamos apenas pelo e-mail para evitar SQL timing attacks na senha
     cursor.execute("""
         SELECT nome, cpf, email, telefone, veiculo, placa, vagas, 
-               rua, numero, complemento, bairro, cidade, estado, cep 
+               rua, numero, complemento, bairro, cidade, estado, cep, senha 
         FROM usuarios 
-        WHERE email = %s AND senha = %s
-    """, (dados["email"], dados["senha"]))
+        WHERE email = %s
+    """, (dados["email"],))
 
     usuario = cursor.fetchone()
     cursor.close()
     conexao.close()
 
-    if usuario:
+    # Verifica se o usuário existe e se o hash da senha confere criptograficamente
+    if usuario and check_password_hash(usuario["senha"], dados["senha"]):
+        # Geração do Token JWT (Válido por 24 horas)
+        tempo_expiracao = datetime.utcnow() + timedelta(hours=24)
+        token = jwt.encode(
+            {
+                "email": usuario["email"],
+                "cpf": usuario["cpf"],
+                "exp": tempo_expiracao
+            },
+            JWT_SECRET,
+            algorithm="HS256"
+        )
+        
         return jsonify({
+            "token": token, # 🔑 O Android precisa guardar este token!
+            "usuario": {
             "nome": usuario["nome"], "cpf": usuario["cpf"], "email": usuario["email"],
             "telefone": usuario["telefone"], "veiculo": usuario.get("veiculo", ""),
             "placa": usuario.get("placa", ""), "vagas": usuario.get("vagas", "0"),
             "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
             "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
             "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", "")
+            }
         }), 200
     else:
-        return jsonify({"erro": "Acesso negado"}), 401
+        # Resposta genérica para mitigar User Enumeration
+        return jsonify({"erro": "E-mail ou senha incorretos"}), 401
 
 
 # 🆕 NOVA ROTA: Recuperação de Senha Segura
@@ -317,7 +387,9 @@ def recuperar_senha():
 
     if usuario:
         # 2. Se tudo bater, troca a senha antiga pela nova!
-        cursor.execute("UPDATE usuarios SET senha = %s WHERE email = %s AND cpf = %s", (nova_senha, email, cpf))
+        # Nova senha criptografada antes do update
+        nova_senha_hash = generate_password_hash(nova_senha)
+        cursor.execute("UPDATE usuarios SET senha = %s WHERE email = %s AND cpf = %s", (nova_senha_hash, email, cpf))
         conexao.commit()
         cursor.close()
         conexao.close()
