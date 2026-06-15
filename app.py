@@ -328,7 +328,6 @@ def login():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Buscamos apenas pelo e-mail para evitar SQL timing attacks na senha
     cursor.execute("""
         SELECT nome, cpf, email, telefone, veiculo, placa, vagas, 
                rua, numero, complemento, bairro, cidade, estado, cep, senha 
@@ -340,9 +339,33 @@ def login():
     cursor.close()
     conexao.close()
 
-    # Verifica se o usuário existe e se o hash da senha confere criptograficamente
-    if usuario and check_password_hash(usuario["senha"], dados["senha"]):
-        # Geração do Token JWT (Válido por 24 horas)
+    # 🔄 ESTRATÉGIA DE MIGRAÇÃO DE SEGURANÇA: Suporte a usuários legados
+    is_valido = False
+    if usuario:
+        # Se a senha salva no banco começar com os cabeçalhos padrão do Werkzeug, valida o Hash
+        if usuario["senha"].startswith(("pbkdf2:", "scrypt:", "bcrypt:")):
+            is_valido = check_password_hash(usuario["senha"], dados["senha"])
+        else:
+            # Usuário antigo: valida por comparação direta em texto limpo (ex: Amara1985@)
+            is_valido = (usuario["senha"] == dados["senha"])
+            
+            # 🟢 AUTO-MIGRAÇÃO: Se a senha limpa estiver certa, converte para Hash imediatamente
+            if is_valido:
+                try:
+                    conn_migrar = conectar_banco()
+                    curr_migrar = conn_migrar.cursor()
+                    novo_hash_seguro = generate_password_hash(dados["senha"])
+                    
+                    curr_migrar.execute("UPDATE usuarios SET senha = %s WHERE email = %s", (novo_hash_seguro, usuario["email"]))
+                    conn_migrar.commit()
+                    curr_migrar.close()
+                    conn_migrar.close()
+                    print(f"🔒 Segurança atualizada: O usuário {usuario['email']} foi migrado para Hash com sucesso!")
+                except Exception as e:
+                    print(f"⚠️ Erro ao atualizar hash de usuário antigo: {e}")
+
+    if is_valido:
+        # Geração normal do Token JWT da sessão
         tempo_expiracao = datetime.utcnow() + timedelta(hours=24)
         token = jwt.encode(
             {
@@ -353,20 +376,19 @@ def login():
             JWT_SECRET,
             algorithm="HS256"
         )
-        
+
         return jsonify({
-            "token": token, # 🔑 O Android precisa guardar este token!
+            "token": token,
             "usuario": {
-            "nome": usuario["nome"], "cpf": usuario["cpf"], "email": usuario["email"],
-            "telefone": usuario["telefone"], "veiculo": usuario.get("veiculo", ""),
-            "placa": usuario.get("placa", ""), "vagas": usuario.get("vagas", "0"),
-            "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
-            "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
-            "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", "")
+                "nome": usuario["nome"], "cpf": usuario["cpf"], "email": usuario["email"],
+                "telefone": usuario["telefone"], "veiculo": usuario.get("veiculo", ""),
+                "placa": usuario.get("placa", ""), "vagas": usuario.get("vagas", "0"),
+                "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
+                "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
+                "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", "")
             }
         }), 200
     else:
-        # Resposta genérica para mitigar User Enumeration
         return jsonify({"erro": "E-mail ou senha incorretos"}), 401
 
 
