@@ -545,13 +545,13 @@ def criar_carona():
           dados["vagas"], dados["motorista"], dados["motorista_cpf"]))
     
     # 2. Adicione este bloco de volta para atualizar o total de vagas ofertadas
-    cursor.execute("""
-        UPDATE usuarios 
-        SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
-        WHERE cpf = %s
-    """, (int(dados["vagas"]), dados["motorista_cpf"]))
+    #cursor.execute("""
+        #UPDATE usuarios 
+        #SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s
+        #WHERE cpf = %s
+    #""", (int(dados["vagas"]), dados["motorista_cpf"]))
     
-    print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
+    #print(f"DEBUG: Atualizando motorista CPF {dados['motorista_cpf']}. Linhas afetadas: {cursor.rowcount}")
      
     conexao.commit()
     cursor.close()
