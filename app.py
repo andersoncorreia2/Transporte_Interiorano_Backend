@@ -11,6 +11,9 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 from functools import wraps
+import random
+import smtplib
+from email.mime.text import MIMEText
 
 app = Flask(__name__)
 
@@ -28,7 +31,7 @@ if firebase_config_str:
 else:
     print("⚠️ AVISO: FIREBASE_CONFIG_JSON não encontrada nas variáveis de ambiente!")
 
-# 🟢 CONFIGURAÇÃO DO JWT
+# CONFIGURAÇÃO DO JWT
 # Em produção no Render, configure uma chave aleatória longa na variável 'JWT_SECRET'
 JWT_SECRET = os.environ.get("JWT_SECRET", "uma_chave_secreta_super_robusta_e_longa_para_desenvolvimento")
 
@@ -117,6 +120,7 @@ def criar_tabelas():
             )
         """)
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token TEXT;")
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_cadastro TEXT DEFAULT '15/06/2026';")
 
         # 2. Tabela de caronas
         cursor.execute("""
@@ -142,6 +146,8 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_origem TEXT;")
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS cidade_destino TEXT;")
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS endereco_destino TEXT;")
+        # 🟢 ADICIONADO: Garante a coluna de CPF do motorista nas caronas
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS motorista_cpf TEXT;")
         
         # 3. Tabela de solicitações
         cursor.execute("""
@@ -152,9 +158,19 @@ def criar_tabelas():
                 status TEXT
             )
         """)
-
-        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")       
+        # 🟢 ADICIONADO: Garante a coluna de CPF do passageiro nas solicitações
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS passageiro_cpf TEXT;")
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
         
+        # 4. Tabela de códigos de recuperação de senha
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS codigos_recuperacao (
+                email TEXT PRIMARY KEY,
+                codigo TEXT NOT NULL,
+                expiracao TIMESTAMP NOT NULL
+            )
+        """)
+
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS corridas_realizadas INTEGER DEFAULT 0;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS passageiros_conduzidos INTEGER DEFAULT 0;")
         
@@ -180,14 +196,19 @@ def cadastrar_usuario():
         # Gera um hash seguro e único baseado em PBKDF2 com salt aleatório
         senha_criptografada = generate_password_hash(dados["senha"])
         
+        # Captura e formata o momento exato do cadastro
+        data_atual = datetime.now()
+        data_formatada = data_atual.strftime("%d/%m/%Y")
+        
         cursor.execute("""
-            INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, city, estado, cep, data_cadastro)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             dados["nome"], dados["cpf"], dados["email"], dados["telefone"],
-            dados.get("veiculo", ""), dados.get("placa", ""), dados["senha"], dados.get("vagas", "0"),
+            dados.get("veiculo", ""), dados.get("placa", ""), senha_criptografada, dados.get("vagas", "0"),
             dados.get("rua", ""), dados.get("numero", ""), dados.get("complemento", ""),
-            dados.get("bairro", ""), dados.get("cidade", ""), dados.get("estado", ""), dados.get("cep", "")
+            dados.get("bairro", ""), dados.get("cidade", ""), dados.get("estado", ""), dados.get("cep", ""),
+            data_formatada # 🟢 Gravando o texto "15/06/2026" no banco de dados
         ))
         conexao.commit()
         return jsonify({"mensagem": "Usuário guardado!"}), 201
@@ -330,7 +351,7 @@ def login():
     
     cursor.execute("""
         SELECT nome, cpf, email, telefone, veiculo, placa, vagas, 
-               rua, numero, complemento, bairro, cidade, estado, cep, senha 
+               rua, numero, complemento, bairro, cidade, estado, cep, senha, data_cadastro 
         FROM usuarios 
         WHERE email = %s
     """, (dados["email"],))
@@ -365,14 +386,9 @@ def login():
                     print(f"⚠️ Erro ao atualizar hash de usuário antigo: {e}")
 
     if is_valido:
-        # Geração normal do Token JWT da sessão
         tempo_expiracao = datetime.utcnow() + timedelta(hours=24)
         token = jwt.encode(
-            {
-                "email": usuario["email"],
-                "cpf": usuario["cpf"],
-                "exp": tempo_expiracao
-            },
+            {"email": usuario["email"], "cpf": usuario["cpf"], "exp": tempo_expiracao},
             JWT_SECRET,
             algorithm="HS256"
         )
@@ -385,7 +401,8 @@ def login():
                 "placa": usuario.get("placa", ""), "vagas": usuario.get("vagas", "0"),
                 "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
                 "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
-                "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", "")
+                "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", ""),
+                "data_cadastro": usuario.get("data_cadastro", "15/06/2026") # 🟢 Envia a string salva
             }
         }), 200
     else:
@@ -393,34 +410,93 @@ def login():
 
 
 # 🆕 NOVA ROTA: Recuperação de Senha Segura
-@app.route("/recuperar_senha", methods=["POST"])
-def recuperar_senha():
+@app.route("/solicitar_codigo", methods=["POST"])
+def solicitar_codigo():
     dados = request.get_json()
     email = dados.get("email")
     cpf = dados.get("cpf")
+
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT email FROM usuarios WHERE email = %s AND cpf = %s", (email, cpf))
+    usuario = cursor.fetchone()
+
+    if not usuario:
+        cursor.close()
+        conexao.close()
+        return jsonify({"erro": "E-mail ou CPF não encontrados."}), 404
+
+    # Gera um OTP aleatório de 6 dígitos e define validade de 10 minutos
+    codigo = str(random.randint(100000, 999999))
+    expiracao = datetime.now() + timedelta(minutes=10)
+
+    cursor.execute("""
+        INSERT INTO codigos_recuperacao (email, codigo, expiracao)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (email) DO UPDATE SET codigo = EXCLUDED.codigo, expiracao = EXCLUDED.expiracao
+    """, (email, codigo, expiracao))
+    
+    conexao.commit()
+    cursor.close()
+    conexao.close()
+
+    # Configuração de e-mail (Configure SMTP_USER e SMTP_PASS no painel do Render se quiser o envio real)
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
+    if smtp_user and smtp_pass:
+        try:
+            msg = MIMEText(f"Seu código de verificação do Transporte Interiorano é: {codigo}\nValidade: 10 minutos.")
+            msg['Subject'] = 'Código de Recuperação de Senha'
+            msg['From'] = smtp_user
+            msg['To'] = email
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+        except Exception as e:
+            print(f"Erro ao disparar SMTP: {e}")
+
+    # Retornamos o 'codigo_debug' no JSON para que você consiga testar no Android Studio 
+    # de forma rápida sem precisar abrir a caixa de e-mail toda hora!
+    return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200
+
+
+@app.route("/validar_e_redefinir_senha", methods=["POST"])
+def validar_e_redefinir_senha():
+    dados = request.get_json()
+    email = dados.get("email")
+    codigo = dados.get("codigo")
     nova_senha = dados.get("senha")
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("SELECT codigo, expiracao FROM codigos_recuperacao WHERE email = %s", (email,))
+    registro = cursor.fetchone()
 
-    # 1. Checa se existe um usuário com ESSE email E ESSE cpf juntos
-    cursor.execute("SELECT email FROM usuarios WHERE email = %s AND cpf = %s", (email, cpf))
-    usuario = cursor.fetchone()
-
-    if usuario:
-        # 2. Se tudo bater, troca a senha antiga pela nova!
-        # Nova senha criptografada antes do update
-        nova_senha_hash = generate_password_hash(nova_senha)
-        cursor.execute("UPDATE usuarios SET senha = %s WHERE email = %s AND cpf = %s", (nova_senha_hash, email, cpf))
-        conexao.commit()
+    if not registro:
         cursor.close()
         conexao.close()
-        return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
-    else:
+        return jsonify({"erro": "Nenhum código foi solicitado para este e-mail."}), 400
+
+    if registro["codigo"] != str(codigo).strip():
         cursor.close()
         conexao.close()
-        return jsonify({"erro": "E-mail ou CPF incorretos!"}), 400
+        return jsonify({"erro": "Código de verificação incorreto!"}), 400
 
+    if datetime.now() > registro["expiracao"]:
+        cursor.close()
+        conexao.close()
+        return jsonify({"erro": "Este código expirou! Solicite um novo."}), 400
+
+    # Token válido: Gera o hash criptográfico seguro e limpa a tabela temporária
+    nova_senha_hash = generate_password_hash(nova_senha)
+    cursor.execute("UPDATE usuarios SET senha = %s WHERE email = %s", (nova_senha_hash, email))
+    cursor.execute("DELETE FROM codigos_recuperacao WHERE email = %s", (email,))
+    
+    conexao.commit()
+    cursor.close()
+    conexao.close()
+    return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
 
 @app.route("/caronas", methods=["GET"])
 def listar_caronas():
