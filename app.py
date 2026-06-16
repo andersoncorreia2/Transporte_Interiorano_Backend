@@ -14,6 +14,7 @@ from functools import wraps
 import random
 import smtplib
 from email.mime.text import MIMEText
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
@@ -408,7 +409,6 @@ def login():
     else:
         return jsonify({"erro": "E-mail ou senha incorretos"}), 401
 
-
 # 🆕 NOVA ROTA: Recuperação de Senha Segura
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
@@ -461,7 +461,7 @@ def solicitar_codigo():
     # de forma rápida sem precisar abrir a caixa de e-mail toda hora!
     #return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200 - Campo para teste
     # Retorna o código para que o app não quebre e você consiga ler no log se necessário
-    return jsonify({"mensagem": "Código enviado com sucesso!", "codigo_debug": codigo}), 200
+    return jsonify({"mensagem": "Código enviado com sucesso!", "codigodebug": codigo}), 200
 
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
