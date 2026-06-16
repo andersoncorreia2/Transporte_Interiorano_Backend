@@ -457,7 +457,8 @@ def solicitar_codigo():
 
     # Retornamos o 'codigo_debug' no JSON para que você consiga testar no Android Studio 
     # de forma rápida sem precisar abrir a caixa de e-mail toda hora!
-    return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200
+    #return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200 - Campo para teste
+    return jsonify({"mensagem": "Código de verificação enviado com sucesso!"}), 200 # Situação real sem exposição do código
 
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
