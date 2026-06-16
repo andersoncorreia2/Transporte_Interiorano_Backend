@@ -461,7 +461,7 @@ def solicitar_codigo():
     # de forma rápida sem precisar abrir a caixa de e-mail toda hora!
     #return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200 - Campo para teste
     # Retorna o código para que o app não quebre e você consiga ler no log se necessário
-    return jsonify({"mensagem": "Código enviado com sucesso!", "codigodebug": codigo}), 200
+    return jsonify({"mensagem": "Código enviado com sucesso!", "codigo_debug": codigo}), 200
 
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
