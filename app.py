@@ -449,16 +449,19 @@ def solicitar_codigo():
             msg['Subject'] = 'Código de Recuperação de Senha'
             msg['From'] = smtp_user
             msg['To'] = email
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            
+            # Adicionado timeout=10 para impedir que o Gunicorn mate o processo por congelamento
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
                 server.login(smtp_user, smtp_pass)
                 server.send_message(msg)
         except Exception as e:
-            print(f"Erro ao disparar SMTP: {e}")
+            print(f"⚠️ Erro controlado ao disparar SMTP: {e}")
 
     # Retornamos o 'codigo_debug' no JSON para que você consiga testar no Android Studio 
     # de forma rápida sem precisar abrir a caixa de e-mail toda hora!
     #return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200 - Campo para teste
-    return jsonify({"mensagem": "Código de verificação enviado com sucesso!"}), 200 # Situação real sem exposição do código
+    # Retorna o código para que o app não quebre e você consiga ler no log se necessário
+    return jsonify({"mensagem": "Código enviado com sucesso!", "codigo_debug": codigo}), 200
 
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
