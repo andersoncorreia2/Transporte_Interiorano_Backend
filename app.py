@@ -208,7 +208,7 @@ def cadastrar_usuario():
             INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            dados["nome"], dados["cpf"], dados["email_salvar"], dados["telefone"],
+            dados["nome"], dados["cpf"], "email_salvar", dados["telefone"],
             dados.get("veiculo", ""), dados.get("placa", ""), senha_criptografada, dados.get("vagas", "0"),
             dados.get("rua", ""), dados.get("numero", ""), dados.get("complemento", ""),
             dados.get("bairro", ""), dados.get("cidade", ""), dados.get("estado", ""), dados.get("cep", ""),
@@ -413,34 +413,31 @@ def login():
         return jsonify({"erro": "E-mail ou senha incorretos"}), 401
 
 # 🆕 NOVA ROTA: Recuperação de Senha Segura
-# 🟢 PREENCHA EXATAMENTE COM ESTE BLOCO NO SEU APP.PY:
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
     dados = request.get_json()
     
     # Remove espaços e joga para minúsculo
     email_digitado = dados.get("email", "").strip().lower()
-    cpf_digitado = dados.get("cpf", "").string()  # Acrescentei .string() para garantir que seja tratado como texto, mesmo que o usuário digite números com formatação diferente (ex: 123.456.789-00 ou 12345678900).
+    cpf_digitado = dados.get("cpf", "").strip()  # Corrigido de .string() para .strip()
+    
     # Garante que o CPF que vai buscar tenha apenas números
     cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Como seu banco armazena apenas números, fazemos a busca direta e ultra veloz!
-    # 🟢 CORREÇÃO: Busca direta usando o LOWER do banco de forma limpa e o CPF direto
-    # 🟢 ADICIONE ESTES DOIS PRINTS DE RASTREIO AQUI:
     print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF: '{cpf_limpo}'")
     
+    # Query corrigida com funções válidas do PostgreSQL
     cursor.execute("""
         SELECT email, cpf FROM usuarios 
-        WHERE LOWERTRIM((email)) = %s 
+        WHERE LOWER(TRIM(email)) = %s 
         AND TRIM(cpf) = %s
     """, (email_digitado, cpf_limpo))
     
     usuario = cursor.fetchone()
 
-    # 🟢 ADICIONE ESTE PRINT PARA VER O RESULTADO DO BANCO:
     print(f"📊 RESULTADO DO BANCO -> Encontrou: {usuario}")
 
     if not usuario:
