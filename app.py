@@ -426,7 +426,6 @@ def solicitar_codigo():
         conexao.close()
         return jsonify({"erro": "E-mail ou CPF não encontrados."}), 404
 
-    # Gera um OTP aleatório de 6 dígitos e define validade de 10 minutos
     codigo = str(random.randint(100000, 999999))
     expiracao = datetime.now() + timedelta(minutes=10)
 
@@ -440,28 +439,28 @@ def solicitar_codigo():
     cursor.close()
     conexao.close()
 
-    # Configuração de e-mail (Configure SMTP_USER e SMTP_PASS no painel do Render se quiser o envio real)
     smtp_user = os.environ.get("SMTP_USER")
     smtp_pass = os.environ.get("SMTP_PASS")
-    if smtp_user and smtp_pass:
-        try:
-            msg = MIMEText(f"Seu código de verificação do Transporte Interiorano é: {codigo}\nValidade: 10 minutos.")
-            msg['Subject'] = 'Código de Recuperação de Senha'
-            msg['From'] = smtp_user
-            msg['To'] = email
-            
-            # Adicionado timeout=10 para impedir que o Gunicorn mate o processo por congelamento
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
-                server.login(smtp_user, smtp_pass)
-                server.send_message(msg)
-        except Exception as e:
-            print(f"⚠️ Erro controlado ao disparar SMTP: {e}")
+    
+    if not smtp_user or not smtp_pass:
+        return jsonify({"erro": "Servidor de e-mail não configurado nas variáveis de ambiente do Render."}), 500
 
-    # Retornamos o 'codigo_debug' no JSON para que você consiga testar no Android Studio 
-    # de forma rápida sem precisar abrir a caixa de e-mail toda hora!
-    #return jsonify({"mensagem": "Código enviado!", "codigo_debug": codigo}), 200 - Campo para teste
-    # Retorna o código para que o app não quebre e você consiga ler no log se necessário
-    return jsonify({"mensagem": "Código enviado com sucesso!"}), 200
+    try:
+        msg = MIMEText(f"Seu código de verificação do Transporte Interiorano é: {codigo}\nValidade: 10 minutos.")
+        msg['Subject'] = 'Código de Recuperação de Senha'
+        msg['From'] = smtp_user
+        msg['To'] = email
+        
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+            
+        # O retorno positivo SÓ ACONTECE se o bloco do e-mail rodar sem levantar exceção!
+        return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
+
+    except Exception as e:
+        print(f"❌ ERRO REAL CRÍTICO SMTP NO RENDER: {e}")
+        return jsonify({"erro": f"O servidor falhou ao despachar o e-mail. Verifique a senha de app da Google. Erro: {str(e)}"}), 500
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
 def validar_e_redefinir_senha():
