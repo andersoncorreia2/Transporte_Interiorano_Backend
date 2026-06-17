@@ -201,11 +201,14 @@ def cadastrar_usuario():
         data_atual = datetime.now()
         data_formatada = data_atual.strftime("%d/%m/%Y")
         
+        # 🟢 CORREÇÃO: Força o e-mail a ser salvo limpo e em minúsculo no banco
+        email_salvar = dados["email"].strip().lower()
+        
         cursor.execute("""
             INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            dados["nome"], dados["cpf"], dados["email"], dados["telefone"],
+            dados["nome"], dados["cpf"], dados["email_salvar"], dados["telefone"],
             dados.get("veiculo", ""), dados.get("placa", ""), senha_criptografada, dados.get("vagas", "0"),
             dados.get("rua", ""), dados.get("numero", ""), dados.get("complemento", ""),
             dados.get("bairro", ""), dados.get("cidade", ""), dados.get("estado", ""), dados.get("cep", ""),
@@ -417,8 +420,7 @@ def solicitar_codigo():
     
     # Remove espaços e joga para minúsculo
     email_digitado = dados.get("email", "").strip().lower()
-    cpf_digitado = dados.get("cpf", "")
-
+    cpf_digitado = dados.get("cpf", "").string()  # Acrescentei .string() para garantir que seja tratado como texto, mesmo que o usuário digite números com formatação diferente (ex: 123.456.789-00 ou 12345678900).
     # Garante que o CPF que vai buscar tenha apenas números
     cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
 
@@ -426,10 +428,11 @@ def solicitar_codigo():
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
     # Como seu banco armazena apenas números, fazemos a busca direta e ultra veloz!
+    # 🟢 CORREÇÃO: Busca direta usando o LOWER do banco de forma limpa e o CPF direto
     cursor.execute("""
         SELECT email, cpf FROM usuarios 
-        WHERE TRIM(LOWER(email)) = %s 
-        AND REGEXP_REPLACE(cpf, '[^0-9]', '', 'g') = %s
+        WHERE LOWER(email) = %s 
+        AND cpf = %s
     """, (email_digitado, cpf_limpo))
     
     usuario = cursor.fetchone()
