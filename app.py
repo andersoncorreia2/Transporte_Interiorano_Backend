@@ -201,14 +201,14 @@ def cadastrar_usuario():
         data_atual = datetime.now()
         data_formatada = data_atual.strftime("%d/%m/%Y")
         
-        # 🟢 CORREÇÃO: Força o e-mail a ser salvo limpo e em minúsculo no banco
+        # Força o e-mail a ser salvo limpo e em minúsculo no banco
         email_salvar = dados["email"].strip().lower()
         
         cursor.execute("""
             INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            dados["nome"], dados["cpf"], "email_salvar", dados["telefone"],
+            dados["nome"], dados["cpf"], email_salvar, dados["telefone"],
             dados.get("veiculo", ""), dados.get("placa", ""), senha_criptografada, dados.get("vagas", "0"),
             dados.get("rua", ""), dados.get("numero", ""), dados.get("complemento", ""),
             dados.get("bairro", ""), dados.get("cidade", ""), dados.get("estado", ""), dados.get("cep", ""),
