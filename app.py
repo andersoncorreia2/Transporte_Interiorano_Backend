@@ -202,7 +202,7 @@ def cadastrar_usuario():
         data_formatada = data_atual.strftime("%d/%m/%Y")
         
         cursor.execute("""
-            INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, city, estado, cep, data_cadastro)
+            INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             dados["nome"], dados["cpf"], dados["email"], dados["telefone"],
@@ -429,7 +429,7 @@ def solicitar_codigo():
     cursor.execute("""
         SELECT email, cpf FROM usuarios 
         WHERE TRIM(LOWER(email)) = %s 
-        AND TRIM(cpf) = %s
+        AND REGEXP_REPLACE(cpf, '[^0-9]', '', 'g') = %s
     """, (email_digitado, cpf_limpo))
     
     usuario = cursor.fetchone()
