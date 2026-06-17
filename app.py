@@ -413,12 +413,25 @@ def login():
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
     dados = request.get_json()
-    email = dados.get("email")
-    cpf = dados.get("cpf")
+    
+    # 🟢 CORREÇÃO: Remove espaços em branco nas pontas do e-mail de entrada
+    email_digitado = dados.get("email", "").strip().lower()
+    cpf_digitado = dados.get("cpf", "")
+
+    # 🟢 CORREÇÃO: Limpa o CPF tirando pontos e traços para fazer uma busca numérica pura
+    cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT email FROM usuarios WHERE email = %s AND cpf = %s", (email, cpf))
+    
+    # 🟢 CORREÇÃO: A query agora limpa o CPF que está no banco usando REGEXP_REPLACE na busca!
+    # Isso garante que funcione mesmo se o usuário foi cadastrado com ou sem pontos!
+    cursor.execute("""
+        SELECT email, cpf FROM usuarios 
+        WHERE TRIM(LOWER(email)) = %s 
+        AND REGEXP_REPLACE(cpf, '[^0-9]', '', 'g') = %s
+    """, (email_digitado, cpf_limpo))
+    
     usuario = cursor.fetchone()
 
     if not usuario:
@@ -429,11 +442,12 @@ def solicitar_codigo():
     codigo = str(random.randint(100000, 999999))
     expiracao = datetime.now() + timedelta(minutes=10)
 
+    # Mantém o insert na tabela de recuperação usando o e-mail real e limpo
     cursor.execute("""
         INSERT INTO codigos_recuperacao (email, codigo, expiracao)
         VALUES (%s, %s, %s)
         ON CONFLICT (email) DO UPDATE SET codigo = EXCLUDED.codigo, expiracao = EXCLUDED.expiracao
-    """, (email, codigo, expiracao))
+    """, (usuario["email"], codigo, expiracao))
     
     conexao.commit()
     cursor.close()
@@ -449,18 +463,17 @@ def solicitar_codigo():
         msg = MIMEText(f"Seu código de verificação do Transporte Interiorano é: {codigo}\nValidade: 10 minutos.")
         msg['Subject'] = 'Código de Recuperação de Senha'
         msg['From'] = smtp_user
-        msg['To'] = email
+        msg['To'] = usuario["email"]
         
         with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
             
-        # O retorno positivo SÓ ACONTECE se o bloco do e-mail rodar sem levantar exceção!
         return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
 
     except Exception as e:
         print(f"❌ ERRO REAL CRÍTICO SMTP NO RENDER: {e}")
-        return jsonify({"erro": f"O servidor falhou ao despachar o e-mail. Verifique a senha de app da Google. Erro: {str(e)}"}), 500
+        return jsonify({"erro": f"O servidor falhou ao despachar o e-mail: {str(e)}"}), 500
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
 def validar_e_redefinir_senha():
