@@ -410,26 +410,26 @@ def login():
         return jsonify({"erro": "E-mail ou senha incorretos"}), 401
 
 # 🆕 NOVA ROTA: Recuperação de Senha Segura
+# 🟢 PREENCHA EXATAMENTE COM ESTE BLOCO NO SEU APP.PY:
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
     dados = request.get_json()
     
-    # 🟢 CORREÇÃO: Remove espaços em branco nas pontas do e-mail de entrada
+    # Remove espaços e joga para minúsculo
     email_digitado = dados.get("email", "").strip().lower()
     cpf_digitado = dados.get("cpf", "")
 
-    # 🟢 CORREÇÃO: Limpa o CPF tirando pontos e traços para fazer uma busca numérica pura
+    # Garante que o CPF que vai buscar tenha apenas números
     cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 🟢 CORREÇÃO: A query agora limpa o CPF que está no banco usando REGEXP_REPLACE na busca!
-    # Isso garante que funcione mesmo se o usuário foi cadastrado com ou sem pontos!
+    # Como seu banco armazena apenas números, fazemos a busca direta e ultra veloz!
     cursor.execute("""
         SELECT email, cpf FROM usuarios 
         WHERE TRIM(LOWER(email)) = %s 
-        AND REGEXP_REPLACE(cpf, '[^0-9]', '', 'g') = %s
+        AND TRIM(cpf) = %s
     """, (email_digitado, cpf_limpo))
     
     usuario = cursor.fetchone()
@@ -442,7 +442,6 @@ def solicitar_codigo():
     codigo = str(random.randint(100000, 999999))
     expiracao = datetime.now() + timedelta(minutes=10)
 
-    # Mantém o insert na tabela de recuperação usando o e-mail real e limpo
     cursor.execute("""
         INSERT INTO codigos_recuperacao (email, codigo, expiracao)
         VALUES (%s, %s, %s)
