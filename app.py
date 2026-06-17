@@ -429,13 +429,19 @@ def solicitar_codigo():
     
     # Como seu banco armazena apenas números, fazemos a busca direta e ultra veloz!
     # 🟢 CORREÇÃO: Busca direta usando o LOWER do banco de forma limpa e o CPF direto
+    # 🟢 ADICIONE ESTES DOIS PRINTS DE RASTREIO AQUI:
+    print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF: '{cpf_limpo}'")
+    
     cursor.execute("""
         SELECT email, cpf FROM usuarios 
-        WHERE LOWER(email) = %s 
-        AND cpf = %s
+        WHERE LOWERTRIM((email)) = %s 
+        AND TRIM(cpf) = %s
     """, (email_digitado, cpf_limpo))
     
     usuario = cursor.fetchone()
+
+    # 🟢 ADICIONE ESTE PRINT PARA VER O RESULTADO DO BANCO:
+    print(f"📊 RESULTADO DO BANCO -> Encontrou: {usuario}")
 
     if not usuario:
         cursor.close()
