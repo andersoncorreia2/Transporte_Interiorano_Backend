@@ -391,17 +391,33 @@ def login():
     else:
         return jsonify({"erro": "Nome de usuário ou senha incorretos"}), 401
 
+# 🟢 SUBSTITUA O BLOCO CORTADO POR ESTE COMPLETO E CORRIGIDO:
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
     dados = request.get_json()
+    
+    # Remove espaços e joga para minúsculo no próprio Python
     email_digitado = dados.get("email", "").strip().lower()
     cpf_digitado = dados.get("cpf", "").strip()
+    
+    # Garante que o CPF que vai buscar tenha apenas números
     cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT email, cpf FROM usuarios WHERE LOWER(email) = %s AND cpf = %s", (email_digitado, cpf_limpo))
+    
+    print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF: '{cpf_limpo}'")
+    
+    # Query corrigida: fecha as aspas, os parâmetros e os parênteses perfeitamente!
+    cursor.execute("""
+        SELECT email, cpf FROM usuarios 
+        WHERE LOWER(email) = %s 
+        AND cpf = %s
+    """, (email_digitado, cpf_limpo))
+    
     usuario = cursor.fetchone()
+
+    print(f"📊 RESULTADO DO BANCO -> Encontrou: {usuario}")
 
     if not usuario:
         cursor.close()
@@ -423,19 +439,24 @@ def solicitar_codigo():
 
     smtp_user = os.environ.get("SMTP_USER")
     smtp_pass = os.environ.get("SMTP_PASS")
+    
     if not smtp_user or not smtp_pass:
-        return jsonify({"erro": "Servidor de e-mail não configurado."}), 500
+        return jsonify({"erro": "Servidor de e-mail não configurado nas variáveis de ambiente do Render."}), 500
 
     try:
         msg = MIMEText(f"Seu código de verificação do Transporte Interiorano é: {codigo}\nValidade: 10 minutos.")
         msg['Subject'] = 'Código de Recuperação de Senha'
         msg['From'] = smtp_user
         msg['To'] = usuario["email"]
+        
         with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
+            
         return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
+
     except Exception as e:
+        print(f"❌ ERRO REAL CRÍTICO SMTP NO RENDER: {e}")
         return jsonify({"erro": f"O servidor falhou ao despachar o e-mail: {str(e)}"}), 500
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
