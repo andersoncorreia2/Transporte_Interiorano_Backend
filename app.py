@@ -624,24 +624,41 @@ def finalizar_solicitacao():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
+        # 1. Atualiza a solicitação específica do passageiro para Finalizado
         cursor.execute("UPDATE solicitacoes SET status = 'Finalizado' WHERE id = %s", (dados["solicitacao_id"],))
-        cursor.execute("SELECT s.passageiro_cpf, c.motorista_cpf, c.vagas FROM solicitacoes s JOIN caronas c ON s.carona_id = c.id WHERE s.id = %s", (dados["solicitacao_id"],))
+        
+        # 2. Busca os dados de amarrações e o número de vagas totais originais do evento
+        cursor.execute("""
+            SELECT s.passageiro_cpf, c.motorista_cpf, c.vagas, c.id as carona_real_id 
+            FROM solicitacoes s 
+            JOIN caronas c ON s.carona_id = c.id 
+            WHERE s.id = %s
+        """, (dados["solicitacao_id"],))
         info = cursor.fetchone()
         
+        # 3. Passageiro recebe +1 corrida realizada no ato da sua finalização individual
         cursor.execute("UPDATE usuarios SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 WHERE cpf = %s", (info['passageiro_cpf'],))
+        
+        # 4. Motorista recebe +1 passageiro conduzido por esta finalização
         cursor.execute("UPDATE usuarios SET passageiros_conduzidos = COALESCE(passageiros_conduzidos, 0) + 1 WHERE cpf = %s", (info['motorista_cpf'],))
         
-        cursor.execute("SELECT count(*) as count FROM solicitacoes WHERE carona_id = %s AND status ILIKE 'Finalizado'", (dados["carona_id"],))
-        finalizados = cursor.fetchone()['count']
-        cursor.execute("SELECT count(*) as count FROM solicitacoes WHERE carona_id = %s", (dados["carona_id"],))
-        total = cursor.fetchone()['count']
+        # 5. Verifica se este era o último passageiro ativo (Pendente ou Aceito) do evento
+        cursor.execute("SELECT count(*) as count FROM solicitacoes WHERE carona_id = %s AND status != 'Finalizado'", (info["carona_real_id"],))
+        restantes = cursor.fetchone()['count']
         
-        if total <= finalizados:
-            cursor.execute("UPDATE usuarios SET corridas_realizadas = corridas_realizadas + 1 WHERE cpf = %s", (info['motorista_cpf'],))
-            cursor.execute("UPDATE caronas SET status = 'Finalizado' WHERE id = %s", (dados["carona_id"],))
-            cursor.execute("UPDATE usuarios SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s WHERE cpf = %s", (int(info['vagas']), info['motorista_cpf']))
+        # Se não houver mais nenhum passageiro pendente/aceito, fecha o evento e computa os pontos do motorista
+        if restantes == 0:
+            # Motorista ganha +1 corrida realizada
+            cursor.execute("UPDATE usuarios SET corridas_realizadas = COALESCE(corridas_realizadas, 0) + 1 WHERE cpf = %s", (info['motorista_cpf'],))
+            # Evento passa a ser Finalizado
+            cursor.execute("UPDATE caronas SET status = 'Finalizado' WHERE id = %s", (info["carona_real_id"],))
+            
+            # 🟢 REGRA MÁGICA: Soma as vagas disponibilizadas originalmente no evento (ex: 4) na coluna vagas_ofertadas do motorista, independente de ocupação!
+            vagas_do_evento = int(info['vagas']) if info['vagas'] else 4
+            cursor.execute("UPDATE usuarios SET vagas_ofertadas = COALESCE(vagas_ofertadas, 0) + %s WHERE cpf = %s", (vagas_do_evento, info['motorista_cpf']))
+            
         conexao.commit()
-        return jsonify({"mensagem": "Viagem finalizada!"}), 200
+        return jsonify({"mensagem": "Viagem finalizada com sucesso!"}), 200
     except Exception as e:
         conexao.rollback()
         return jsonify({"erro": str(e)}), 500
