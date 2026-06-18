@@ -553,7 +553,7 @@ def pedir_carona():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 🟢 CORREÇÃO CIRÚRGICA: Agora busca associando pelo CPF do motorista (motorista_cpf), que nunca muda e não tem erro de acentuação!
+    # Busca usando a amarração segura por CPF que corrigimos
     cursor.execute("""
         SELECT c.vagas, u.fcm_token 
         FROM caronas c 
@@ -564,13 +564,18 @@ def pedir_carona():
     resultado = cursor.fetchone()
 
     if resultado and int(resultado["vagas"]) > 0:
+        # 🟢 GRAVA A SOLICITAÇÃO PENDENTE
         cursor.execute("INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) VALUES (%s, %s, %s, %s, %s)", (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
+        
+        # 🟢 A MÁGICA DA SUA REGRA: Diminui imediatamente o número de vagas disponíveis de 4 para 3, 3 para 2, etc.
+        cursor.execute("UPDATE caronas SET vagas = CAST(CAST(vagas AS INTEGER) - 1 AS TEXT) WHERE id = %s", (carona_id,))
+        
         conexao.commit()
         if resultado.get("fcm_token"):
             enviar_notificacao(resultado["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
         cursor.close()
         conexao.close()
-        return jsonify({"mensagem": "Pedido registrado!"}), 201
+        return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
         
     cursor.close()
     conexao.close()
@@ -590,12 +595,28 @@ def responder_solicitacao(id_solicitacao):
 @app.route("/solicitacoes/<int:id_solicitacao>", methods=["DELETE"])
 def cancelar_solicitacao(id_solicitacao):
     conexao = conectar_banco()
-    cursor = conexao.cursor()
-    cursor.execute("DELETE FROM solicitacoes WHERE id = %s", (id_solicitacao,))
-    conexao.commit()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
+    # Descobre qual era a carona antes de apagar o pedido
+    cursor.execute("SELECT carona_id FROM solicitacoes WHERE id = %s", (id_solicitacao,))
+    pedido = cursor.fetchone()
+    
+    if pedido:
+        carona_id = pedido["carona_id"]
+        # Deleta o pedido do banco
+        cursor.execute("DELETE FROM solicitacoes WHERE id = %s", (id_solicitacao,))
+        
+        # 🟢 DEVOLVE A VAGA: Soma +1 de volta na contagem do evento automaticamente
+        cursor.execute("UPDATE caronas SET vagas = CAST(CAST(vagas AS INTEGER) + 1 AS TEXT) WHERE id = %s", (carona_id,))
+        
+        conexao.commit()
+        cursor.close()
+        conexao.close()
+        return jsonify({"mensagem": "Pedido cancelado e vaga devolvida!"}), 200
+        
     cursor.close()
     conexao.close()
-    return jsonify({"mensagem": "Pedido cancelado!"}), 200
+    return jsonify({"erro": "Solicitação não encontrada."}), 404
 
 @app.route("/finalizar_solicitacao", methods=["POST"])
 def finalizar_solicitacao():
