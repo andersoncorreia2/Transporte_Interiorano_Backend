@@ -553,30 +553,38 @@ def pedir_carona():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Busca usando a amarração segura por CPF que corrigimos
-    cursor.execute("""
-        SELECT c.vagas, u.fcm_token 
-        FROM caronas c 
-        JOIN usuarios u ON c.motorista_cpf = u.cpf 
-        WHERE c.id = %s
-    """, (carona_id,))
+    # 1. Busca a quantidade atual de vagas que está na tabela
+    cursor.execute("SELECT vagas, motorista_cpf FROM caronas WHERE id = %s", (carona_id,))
+    carona = cursor.fetchone()
     
-    resultado = cursor.fetchone()
+    if carona:
+        # Converte o texto do banco para número de forma segura no Python
+        vagas_atuais = int(carona["vagas"]) if carona["vagas"].isdigit() else 0
+        
+        if vagas_atuais > 0:
+            # 2. Faz o decremento numérico real
+            novas_vagas = vagas_atuais - 1
+            
+            # 3. Atualiza a tabela gravando o novo valor numérico convertido em string
+            cursor.execute("UPDATE caronas SET vagas = %s WHERE id = %s", (str(novas_vagas), carona_id))
+            
+            # 4. Insere o registro na tabela de solicitações como Pendente
+            cursor.execute("""
+                INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
+                VALUES (%s, %s, %s, %s, %s)
+            """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
+            
+            # 5. Envia a notificação FCM para o motorista dono da carona
+            cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (carona["motorista_cpf"],))
+            motorista = cursor.fetchone()
+            if motorista and motorista.get("fcm_token"):
+                enviar_notificacao(motorista["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
+                
+            conexao.commit()
+            cursor.close()
+            conexao.close()
+            return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
 
-    if resultado and int(resultado["vagas"]) > 0:
-        # 🟢 GRAVA A SOLICITAÇÃO PENDENTE
-        cursor.execute("INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) VALUES (%s, %s, %s, %s, %s)", (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
-        
-        # 🟢 A MÁGICA DA SUA REGRA: Diminui imediatamente o número de vagas disponíveis de 4 para 3, 3 para 2, etc.
-        cursor.execute("UPDATE caronas SET vagas = CAST(CAST(vagas AS INTEGER) - 1 AS TEXT) WHERE id = %s", (carona_id,))
-        
-        conexao.commit()
-        if resultado.get("fcm_token"):
-            enviar_notificacao(resultado["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
-        cursor.close()
-        conexao.close()
-        return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
-        
     cursor.close()
     conexao.close()
     return jsonify({"erro": "Carona sem vagas ou inexistente."}), 400
