@@ -549,9 +549,18 @@ def pedir_carona():
     dados = request.get_json()
     carona_id = int(dados["carona_id"])
     cpf_passageiro = dados.get("passageiro_cpf")
+    
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT c.vagas, u.fcm_token FROM caronas c JOIN usuarios u ON c.motorista = u.nome WHERE c.id = %s", (carona_id,))
+    
+    # 🟢 CORREÇÃO CIRÚRGICA: Agora busca associando pelo CPF do motorista (motorista_cpf), que nunca muda e não tem erro de acentuação!
+    cursor.execute("""
+        SELECT c.vagas, u.fcm_token 
+        FROM caronas c 
+        JOIN usuarios u ON c.motorista_cpf = u.cpf 
+        WHERE c.id = %s
+    """, (carona_id,))
+    
     resultado = cursor.fetchone()
 
     if resultado and int(resultado["vagas"]) > 0:
@@ -562,6 +571,7 @@ def pedir_carona():
         cursor.close()
         conexao.close()
         return jsonify({"mensagem": "Pedido registrado!"}), 201
+        
     cursor.close()
     conexao.close()
     return jsonify({"erro": "Carona sem vagas ou inexistente."}), 400
