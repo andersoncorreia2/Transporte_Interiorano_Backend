@@ -516,12 +516,22 @@ def criar_carona():
 def deletar_carona(id_carona):
     conexao = conectar_banco()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM caronas WHERE id = %s", (id_carona,))
-    cursor.execute("DELETE FROM solicitacoes WHERE carona_id = %s", (id_carona,))
-    conexao.commit()
-    cursor.close()
-    conexao.close()
-    return jsonify({"mensagem": "Evento e solicitações excluídos!"}), 200
+    try:
+        # 🟢 CORRIGIDO: Primeiro deletamos as solicitações vinculadas para liberar a chave estrangeira
+        cursor.execute("DELETE FROM solicitacoes WHERE carona_id = %s", (id_carona,))
+        
+        # 🟢 Agora sim, deletamos o evento com segurança sem violar o constraint do Postgres
+        cursor.execute("DELETE FROM caronas WHERE id = %s", (id_carona,))
+        
+        conexao.commit()
+        return jsonify({"mensagem": "Evento e solicitações excluídos com sucesso!"}), 200
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao deletar carona: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 @app.route("/solicitacoes", methods=["GET"])
 def listar_solicitacoes():
@@ -585,13 +595,22 @@ def pedir_carona():
 @app.route("/solicitacoes/<int:id_solicitacao>", methods=["PUT"])
 def responder_solicitacao(id_solicitacao):
     dados = request.get_json()
+    status_recebido = dados.get("status")
+    
     conexao = conectar_banco()
     cursor = conexao.cursor()
-    cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (dados["status"], id_solicitacao))
-    conexao.commit()
-    cursor.close()
-    conexao.close()
-    return jsonify({"mensagem": "Status atualizado!"}), 200
+    try:
+        # 🟢 CORRIGIDO: Força o update de status com tratamento de exceção estruturado
+        cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status_recebido, id_solicitacao))
+        conexao.commit()
+        return jsonify({"mensagem": "Status atualizado com sucesso!"}), 200
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao atualizar status: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 @app.route("/solicitacoes/<int:id_solicitacao>", methods=["DELETE"])
 def cancelar_solicitacao(id_solicitacao):
