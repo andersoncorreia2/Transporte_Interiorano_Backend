@@ -115,6 +115,8 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_cadastro TEXT DEFAULT '15/06/2026';")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS corridas_realizadas INTEGER DEFAULT 0;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS passageiros_conduzidos INTEGER DEFAULT 0;")
+        # 🟢 ADICIONE ESTA LINHA LOGO ABAIXO NO SEU CRiAR_TABELAS:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS vagas_ofertadas INTEGER DEFAULT 0;")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS caronas (
@@ -553,41 +555,32 @@ def pedir_carona():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 1. Busca a quantidade atual de vagas que está na tabela
+    # Busca para validar a carona e capturar o motorista correspondente
     cursor.execute("SELECT vagas, motorista_cpf FROM caronas WHERE id = %s", (carona_id,))
     carona = cursor.fetchone()
     
     if carona:
-        # Converte o texto do banco para número de forma segura no Python
-        vagas_atuais = int(carona["vagas"]) if carona["vagas"].isdigit() else 0
+        # 🟢 CORRIGIDO: O valor absoluto das vagas na tabela caronas FICA FIXO (ex: 4).
+        # Apenas gravamos a solicitação como Pendente. O Kotlin deduz dinamicamente.
+        cursor.execute("""
+            INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
+            VALUES (%s, %s, %s, %s, %s)
+        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
         
-        if vagas_atuais > 0:
-            # 2. Faz o decremento numérico real
-            novas_vagas = vagas_atuais - 1
+        # Envia a notificação FCM para o motorista dono da carona
+        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (carona["motorista_cpf"],))
+        motorista = cursor.fetchone()
+        if motorista and motorista.get("fcm_token"):
+            enviar_notificacao(motorista["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
             
-            # 3. Atualiza a tabela gravando o novo valor numérico convertido em string
-            cursor.execute("UPDATE caronas SET vagas = %s WHERE id = %s", (str(novas_vagas), carona_id))
-            
-            # 4. Insere o registro na tabela de solicitações como Pendente
-            cursor.execute("""
-                INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
-                VALUES (%s, %s, %s, %s, %s)
-            """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
-            
-            # 5. Envia a notificação FCM para o motorista dono da carona
-            cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (carona["motorista_cpf"],))
-            motorista = cursor.fetchone()
-            if motorista and motorista.get("fcm_token"):
-                enviar_notificacao(motorista["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
-                
-            conexao.commit()
-            cursor.close()
-            conexao.close()
-            return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
+        conexao.commit()
+        cursor.close()
+        conexao.close()
+        return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
 
     cursor.close()
     conexao.close()
-    return jsonify({"erro": "Carona sem vagas ou inexistente."}), 400
+    return jsonify({"erro": "Carona inexistente."}), 400
 
 @app.route("/solicitacoes/<int:id_solicitacao>", methods=["PUT"])
 def responder_solicitacao(id_solicitacao):
@@ -605,22 +598,16 @@ def cancelar_solicitacao(id_solicitacao):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Descobre qual era a carona antes de apagar o pedido
-    cursor.execute("SELECT carona_id FROM solicitacoes WHERE id = %s", (id_solicitacao,))
+    cursor.execute("SELECT id FROM solicitacoes WHERE id = %s", (id_solicitacao,))
     pedido = cursor.fetchone()
     
     if pedido:
-        carona_id = pedido["carona_id"]
-        # Deleta o pedido do banco
+        # 🟢 CORRIGIDO: Remove o pedido sem tentar fazer UPDATE na tabela caronas
         cursor.execute("DELETE FROM solicitacoes WHERE id = %s", (id_solicitacao,))
-        
-        # 🟢 DEVOLVE A VAGA: Soma +1 de volta na contagem do evento automaticamente
-        cursor.execute("UPDATE caronas SET vagas = CAST(CAST(vagas AS INTEGER) + 1 AS TEXT) WHERE id = %s", (carona_id,))
-        
         conexao.commit()
         cursor.close()
         conexao.close()
-        return jsonify({"mensagem": "Pedido cancelado e vaga devolvida!"}), 200
+        return jsonify({"mensagem": "Pedido cancelado com sucesso!"}), 200
         
     cursor.close()
     conexao.close()
@@ -697,4 +684,3 @@ def listar_historico_motorista_por_cpf(cpf):
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host="0.0.0.0", port=porta)
-    
