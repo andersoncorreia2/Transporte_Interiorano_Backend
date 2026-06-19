@@ -539,7 +539,9 @@ def listar_solicitacoes():
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     cursor.execute("DELETE FROM solicitacoes WHERE status = 'Expirado'")
     conexao.commit()
-    cursor.execute("SELECT * FROM solicitacoes WHERE status != 'Finalizado'")
+    
+    # 🟢 CORRIGIDO: Seleciona todos os registros para manter o histórico visível no DBeaver e no App
+    cursor.execute("SELECT * FROM solicitacoes")
     solicitacoes_do_cofre = cursor.fetchall()
     lista_solicitacoes = []
     agora = datetime.now()
@@ -551,7 +553,15 @@ def listar_solicitacoes():
                 status = "Expirado"
                 cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status, sol["id"]))
                 conexao.commit()
-        lista_solicitacoes.append({"id": sol["id"], "carona_id": sol["carona_id"], "passageiro": sol["passageiro"], "status": status})
+                
+        # 🟢 CORRIGIDO: Garante o envio do objeto completo preenchido para o radar do Kotlin
+        lista_solicitacoes.append({
+            "id": sol["id"], 
+            "carona_id": sol["carona_id"], 
+            "passageiro": sol["passageiro"], 
+            "status": status,
+            "passageiro_cpf": sol.get("passageiro_cpf", "")
+        })
     cursor.close()
     conexao.close()
     return jsonify(lista_solicitacoes), 200
