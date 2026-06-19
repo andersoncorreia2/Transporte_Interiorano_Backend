@@ -393,28 +393,26 @@ def login():
     else:
         return jsonify({"erro": "Nome de usuário ou senha incorretos"}), 401
 
-# 🟢 SUBSTITUA O BLOCO CORTADO POR ESTE COMPLETO E CORRIGIDO:
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
     dados = request.get_json()
     
-    # Remove espaços e joga para minúsculo no próprio Python
     email_digitado = dados.get("email", "").strip().lower()
     cpf_digitado = dados.get("cpf", "").strip()
     
-    # Garante que o CPF que vai buscar tenha apenas números
+    # 🟢 Limpa o CPF de qualquer caractere não numérico recebido
     cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF: '{cpf_limpo}'")
+    print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF Limpo: '{cpf_limpo}'")
     
-    # Query corrigida: fecha as aspas, os parâmetros e os parênteses perfeitamente!
+    # 🟢 Query corrigida aplicando o REPLACE no banco e passando o cpf_limpo tratado
     cursor.execute("""
         SELECT email, cpf FROM usuarios 
         WHERE LOWER(email) = %s 
-        AND cpf = %s
+        AND REPLACE(REPLACE(cpf, '.', ''), '-', '') = %s
     """, (email_digitado, cpf_limpo))
     
     usuario = cursor.fetchone()
