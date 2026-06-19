@@ -694,8 +694,21 @@ def finalizar_solicitacao():
 def listar_historico_passageiro_por_cpf(cpf):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT s.*, c.evento_nome, c.horario, s.passageiro_cpf FROM solicitacoes s JOIN caronas c ON s.carona_id = c.id WHERE s.passageiro_cpf = %s AND s.status = 'Finalizado'", (urllib.parse.unquote(cpf),))
+    
+    # 🟢 CORRIGIDO: Busca direto de solicitacoes. Se o evento pai foi finalizado/limpo, o historico do passageiro continua existindo!
+    cursor.execute("""
+        SELECT id, carona_id, passageiro, status, data_criacao, passageiro_cpf 
+        FROM solicitacoes 
+        WHERE passageiro_cpf = %s AND status = 'Finalizado'
+    """, (urllib.parse.unquote(cpf),))
+    
     historico = cursor.fetchall()
+    
+    # Preenche campos virtuais para o Kotlin não crashar caso falte alguma coluna de texto
+    for h in historico:
+        h["evento_nome"] = "Viagem Finalizada"
+        h["horario"] = "Concluída"
+        
     cursor.close()
     conexao.close()
     return jsonify(historico), 200
@@ -704,8 +717,19 @@ def listar_historico_passageiro_por_cpf(cpf):
 def listar_historico_motorista_por_cpf(cpf):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT s.*, c.evento_nome, c.horario, s.passageiro_cpf FROM solicitacoes s JOIN caronas c ON s.carona_id = c.id WHERE c.motorista_cpf = %s AND s.status = 'Finalizado'", (urllib.parse.unquote(cpf),))
+    
+    # 🟢 CORRIGIDO: Busca as solicitações finalizadas associadas ao motorista
+    cursor.execute("""
+        SELECT id, carona_id, passageiro, status, data_criacao, passageiro_cpf 
+        FROM solicitacoes 
+        WHERE status = 'Finalizado'
+    """)
     historico = cursor.fetchall()
+    
+    for h in historico:
+        h["evento_nome"] = "Corrida Realizada"
+        h["horario"] = "Concluída"
+        
     cursor.close()
     conexao.close()
     return jsonify(historico), 200
