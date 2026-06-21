@@ -17,7 +17,6 @@ import random
 import smtplib
 from email.mime.text import MIMEText
 import urllib.request
-import json
 
 app = Flask(__name__)
 
@@ -403,29 +402,31 @@ def solicitar_codigo():
     
     email_digitado = dados.get("email", "").strip().lower()
     cpf_digitado = dados.get("cpf", "").strip()
+    
+    # 🟢 Limpa o CPF recebido do App deixando APENAS os números
     cpf_limpo = ''.join(filter(str.isdigit, cpf_digitado))
 
     conexao = conectar_banco()
-    if not conexao:
-        return jsonify({"erro": "Falha interna de conexão com o banco."}), 500
-        
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
+    print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF Limpo: '{cpf_limpo}'")
+    
     try:
+        # 🟢 Usa regexp_replace para remover TUDO que não for número do CPF no banco de dados
         cursor.execute("""
             SELECT email, cpf FROM usuarios 
             WHERE LOWER(TRIM(email)) = %s 
             AND regexp_replace(cpf, '\\D', '', 'g') = %s
         """, (email_digitado, cpf_limpo))
+        
         usuario = cursor.fetchone()
-    
     except Exception as e:
-        print(f"Erro ao buscar usuário: {e}")
-        # 🟢 Primeiro fechamos os recursos abertos na memória
+        print(f"❌ Erro na query do banco: {e}")
         cursor.close()
         conexao.close()
-        # 🟢 Só depois damos o return final para encerrar a função
         return jsonify({"erro": "Erro interno ao buscar usuário."}), 500
+
+    print(f"📊 RESULTADO DO BANCO -> Encontrou: {usuario}")
 
     if not usuario:
         cursor.close()
@@ -445,33 +446,11 @@ def solicitar_codigo():
     cursor.close()
     conexao.close()
 
-    # 🟢 ENVIO REAL DE E-MAIL USANDO SENDGRID
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        return jsonify({"erro": "Chave do SendGrid não configurada no Render."}), 500
-
-    url = "https://api.sendgrid.com/v3/mail/send"
-    payload = json.dumps({
-        "personalizations": [{"to": [{"email": usuario["email"]}]}],
-        "from": {"email": "an.rc@ig.com.br"}, # 🟢 SEU E-MAIL VERIFICADO NO SENDGRID
-        "subject": "Código de Recuperação - Transporte Interiorano",
-        "content": [{"type": "text/plain", "value": f"Seu código de verificação é: {codigo}\nValidade: 10 minutos."}]
-    }).encode("utf-8")
-
-    req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {api_key}")
-    req.add_header("Content-Type", "application/json")
-
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            if response.status == 202:
-                return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
-            else:
-                print(f"Erro SendGrid status: {response.status}")
-                return jsonify({"erro": "Falha ao enviar e-mail."}), 500
-    except Exception as e:
-        print(f"❌ ERRO REAL CRÍTICO SENDGRID: {e}")
-        return jsonify({"erro": f"O servidor falhou ao despachar o e-mail: {str(e)}"}), 500
+    # 🟢 ALTERADO PARA TESTES: Mostra o código no log do Render em vez de enviar por e-mail
+    print(f"🔒 CÓDIGO DE RECUPERAÇÃO GERADO PARA {usuario['email']}: {codigo}")
+    
+    # Retorna sucesso para o aplicativo não dar erro
+    return jsonify({"mensagem": "Código gerado com sucesso! (Verifique os logs do Render)"}), 200
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
 def validar_e_redefinir_senha():
