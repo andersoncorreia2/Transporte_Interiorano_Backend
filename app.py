@@ -400,30 +400,38 @@ def solicitar_codigo():
     email_digitado = dados.get("email", "").strip().lower()
     cpf_digitado = dados.get("cpf", "").strip()
     
-    # 🟢 Limpa o CPF de qualquer caractere não numérico recebido
-    cpf_limpo = ''.join(filter(str.isdigit(), cpf_digitado))
+    # 🟢 Limpa o CPF recebido do App deixando APENAS os números
+    cpf_limpo = ''.join(filter(str.isdigit, cpf_digitado))
 
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
     print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF Limpo: '{cpf_limpo}'")
     
-    # 🟢 Query corrigida aplicando o REPLACE no banco e passando o cpf_limpo tratado
-    cursor.execute("""
-        SELECT email, cpf FROM usuarios 
-        WHERE LOWER(email) = %s 
-        AND REPLACE(REPLACE(cpf, '.', ''), '-', '') = %s
-    """, (email_digitado, cpf_limpo))
-    
-    usuario = cursor.fetchone()
+    try:
+        # 🟢 CORRIGIDO: Usa regexp_replace para remover TUDO que não for número do CPF no banco de dados
+        # Isso garante que vai funcionar mesmo se o CPF estiver salvo com espaços ou caracteres estranhos
+        cursor.execute("""
+            SELECT email, cpf FROM usuarios 
+            WHERE LOWER(TRIM(email)) = %s 
+            AND regexp_replace(cpf, '\\D', '', 'g') = %s
+        """, (email_digitado, cpf_limpo))
+        
+        usuario = cursor.fetchone()
+    except Exception as e:
+        print(f"❌ Erro na query do banco: {e}")
+        cursor.close()
+        conexao.close()
+        return jsonify({"erro": "Erro interno ao buscar usuário."}), 500
 
     print(f"📊 RESULTADO DO BANCO -> Encontrou: {usuario}")
 
     if not usuario:
         cursor.close()
         conexao.close()
-        return jsonify({"erro": "E-mail ou CPF não encontrados."}), 404
+        return jsonify({"erro": "E-mail ou CPF não encontrados no sistema."}), 404
 
+    # ... (O RESTO DO CÓDIGO DE ENVIO DE E-MAIL CONTINUA IGUAL ABAIXO) ...
     codigo = str(random.randint(100000, 999999))
     expiracao = datetime.now() + timedelta(minutes=10)
 
