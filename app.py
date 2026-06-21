@@ -457,7 +457,9 @@ def solicitar_codigo():
         msg['From'] = smtp_user
         msg['To'] = usuario["email"]
         
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
+        # 🟢 CORRIGIDO: Trocado para porta 587 com STARTTLS (Render libera esta porta)
+        with smtplib.SMTP_SSL('smtp.gmail.com', 587, timeout=15) as server:
+            server.starttls() # Inicia a camada de segurança
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
             
