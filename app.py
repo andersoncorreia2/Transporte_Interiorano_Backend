@@ -409,8 +409,7 @@ def solicitar_codigo():
     print(f"🔎 BUSCANDO RECUPERAÇÃO -> Email: '{email_digitado}' | CPF Limpo: '{cpf_limpo}'")
     
     try:
-        # 🟢 CORRIGIDO: Usa regexp_replace para remover TUDO que não for número do CPF no banco de dados
-        # Isso garante que vai funcionar mesmo se o CPF estiver salvo com espaços ou caracteres estranhos
+        # 🟢 Usa regexp_replace para remover TUDO que não for número do CPF no banco de dados
         cursor.execute("""
             SELECT email, cpf FROM usuarios 
             WHERE LOWER(TRIM(email)) = %s 
@@ -431,7 +430,6 @@ def solicitar_codigo():
         conexao.close()
         return jsonify({"erro": "E-mail ou CPF não encontrados no sistema."}), 404
 
-    # ... (O RESTO DO CÓDIGO DE ENVIO DE E-MAIL CONTINUA IGUAL ABAIXO) ...
     codigo = str(random.randint(100000, 999999))
     expiracao = datetime.now() + timedelta(minutes=10)
 
@@ -445,29 +443,11 @@ def solicitar_codigo():
     cursor.close()
     conexao.close()
 
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASS")
+    # 🟢 ALTERADO PARA TESTES: Mostra o código no log do Render em vez de enviar por e-mail
+    print(f"🔒 CÓDIGO DE RECUPERAÇÃO GERADO PARA {usuario['email']}: {codigo}")
     
-    if not smtp_user or not smtp_pass:
-        return jsonify({"erro": "Servidor de e-mail não configurado nas variáveis de ambiente do Render."}), 500
-
-    try:
-        msg = MIMEText(f"Seu código de verificação do Transporte Interiorano é: {codigo}\nValidade: 10 minutos.")
-        msg['Subject'] = 'Código de Recuperação de Senha'
-        msg['From'] = smtp_user
-        msg['To'] = usuario["email"]
-        
-        # 🟢 CORRIGIDO: Trocado para porta 587 com STARTTLS (Render libera esta porta)
-        with smtplib.SMTP_SSL('smtp.gmail.com', 587, timeout=15) as server:
-            server.starttls() # Inicia a camada de segurança
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-            
-        return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
-
-    except Exception as e:
-        print(f"❌ ERRO REAL CRÍTICO SMTP NO RENDER: {e}")
-        return jsonify({"erro": f"O servidor falhou ao despachar o e-mail: {str(e)}"}), 500
+    # Retorna sucesso para o aplicativo não dar erro
+    return jsonify({"mensagem": "Código gerado com sucesso! (Verifique os logs do Render)"}), 200
 
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
 def validar_e_redefinir_senha():
