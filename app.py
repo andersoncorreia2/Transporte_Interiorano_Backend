@@ -2,8 +2,6 @@ import os
 import urllib.parse
 import psycopg2 
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-from flask import jsonify
 from psycopg2 import IntegrityError
 from flask import Flask, jsonify, request
 import firebase_admin
@@ -16,7 +14,6 @@ from functools import wraps
 import random
 import smtplib
 from email.mime.text import MIMEText
-import urllib.request
 
 app = Flask(__name__)
 
@@ -113,7 +110,7 @@ def criar_tabelas():
             )
         """)
         # 🟢 ADIÇÃO CRÍTICA DO CAMPO USUÁRIO SE ELE NÃO EXISTIR
-        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS usuario VARCHAR(50) UNIQUE;")  #Substituiu text por varchar(50)
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS usuario TEXT UNIQUE;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token TEXT;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_cadastro TEXT DEFAULT '15/06/2026';")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS corridas_realizadas INTEGER DEFAULT 0;")
