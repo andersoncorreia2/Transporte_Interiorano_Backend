@@ -495,7 +495,7 @@ def listar_caronas(cpf_passageiro):
     
     try:
         # Puxa caronas Abertas, ocultando aquelas onde o passageiro foi recusado pessoalmente
-        cursor.execute("""
+        query = """
             SELECT c.* FROM caronas c
             WHERE c.status = 'Aberta'
             AND NOT EXISTS (
@@ -503,10 +503,14 @@ def listar_caronas(cpf_passageiro):
                 FROM solicitacoes s 
                 WHERE s.carona_id = c.id 
                 AND s.passageiro_cpf = %s 
-                AND s.status LIKE 'Recusado%'
+                AND s.status LIKE 'Recusado%%'
             )
             ORDER BY c.id DESC
-        """, (urllib.parse.unquote(cpf_passageiro),))
+        """
+        
+        # 🟢 CORREÇÃO AQUI: Garantindo que o argumento seja passado como uma tupla de 1 elemento (notar a vírgula final)
+        cpf_real = urllib.parse.unquote(cpf_passageiro)
+        cursor.execute(query, (cpf_real,))
         
         caronas_limpas = cursor.fetchall()
         return jsonify(caronas_limpas), 200
