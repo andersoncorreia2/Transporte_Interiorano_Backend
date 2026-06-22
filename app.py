@@ -392,7 +392,7 @@ def login():
         }), 200
     else:
         return jsonify({"erro": "Nome de usuário ou senha incorretos"}), 401
-
+    
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
     dados = request.get_json()
@@ -448,7 +448,7 @@ def solicitar_codigo():
     
     # Retorna sucesso para o aplicativo não dar erro
     return jsonify({"mensagem": "Código gerado com sucesso! (Verifique os logs do Render)"}), 200
-
+  
 @app.route("/validar_e_redefinir_senha", methods=["POST"])
 def validar_e_redefinir_senha():
     dados = request.get_json()
