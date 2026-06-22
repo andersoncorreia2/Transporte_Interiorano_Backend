@@ -685,15 +685,18 @@ def listar_historico_passageiro_por_cpf(cpf):
         return jsonify({"erro": "Falha na conexão com o banco"}), 500
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 🟢 CORRIGIDO: Faz JOIN com caronas para buscar os dados reais do evento do passageiro
     try:
         cursor.execute("""
             SELECT 
+                s.id,
+                s.carona_id,
+                s.passageiro,
+                s.passageiro_cpf,
+                s.status,
                 c.evento_nome,
                 c.cidade_origem,
                 c.cidade_destino,
-                c.horario,
-                s.status
+                c.horario
             FROM solicitacoes s
             JOIN caronas c ON s.carona_id = c.id
             WHERE s.passageiro_cpf = %s AND s.status = 'Finalizado'
@@ -717,18 +720,22 @@ def listar_historico_motorista_por_cpf(cpf):
         return jsonify({"erro": "Falha na conexão com o banco"}), 500
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 🟢 CORRIGIDO: Busca direto de caronas usando DISTINCT para trazer apenas os 6 eventos únicos do motorista, com dados completos
     try:
+        # DISTINCT ON garante que traremos apenas os 6 eventos únicos, sem repetir cards por passageiro
         cursor.execute("""
-            SELECT 
-                evento_nome,
-                cidade_origem,
-                cidade_destino,
-                horario,
-                status
-            FROM caronas
-            WHERE motorista_cpf = %s AND status = 'Finalizado'
-            ORDER BY id DESC
+            SELECT DISTINCT ON (c.id)
+                c.id,
+                c.id as carona_id,
+                c.motorista as passageiro,
+                c.motorista_cpf as passageiro_cpf,
+                c.status,
+                c.evento_nome,
+                c.cidade_origem,
+                c.cidade_destino,
+                c.horario
+            FROM caronas c
+            WHERE c.motorista_cpf = %s AND c.status = 'Finalizado'
+            ORDER BY c.id DESC
         """, (urllib.parse.unquote(cpf),))
         
         historico = cursor.fetchall()
