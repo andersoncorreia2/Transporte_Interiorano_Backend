@@ -78,14 +78,25 @@ def registrar_token():
 
 def enviar_notificacao(token, titulo, corpo):
     try:
+        # 🟢 CORRIGIDO: Removido o parâmetro inválido 'notification_priority'
+        android_alert = messaging.AndroidConfig(
+            priority='high',
+            notification=messaging.AndroidNotification(
+                sound='default',
+                default_sound=True
+            )
+        )
+
         message = messaging.Message(
             notification=messaging.Notification(title=titulo, body=corpo),
             token=token,
+            android=android_alert # Injeta a configuração de áudio correta no payload
         )
         messaging.send(message)
+        print("✅ Notificação enviada com diretrizes de som ativa!")
     except Exception as e:
         print(f"Erro ao enviar notificação: {e}")
-
+        
 def criar_tabelas():
     conexao = conectar_banco()
     cursor = conexao.cursor()
