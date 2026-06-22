@@ -681,46 +681,64 @@ def finalizar_solicitacao():
 @app.route("/historico_cpf/<cpf>", methods=["GET"])
 def listar_historico_passageiro_por_cpf(cpf):
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 🟢 CORRIGIDO: Busca direto de solicitacoes. Se o evento pai foi finalizado/limpo, o historico do passageiro continua existindo!
-    cursor.execute("""
-        SELECT id, carona_id, passageiro, status, data_criacao, passageiro_cpf 
-        FROM solicitacoes 
-        WHERE passageiro_cpf = %s AND status = 'Finalizado'
-    """, (urllib.parse.unquote(cpf),))
-    
-    historico = cursor.fetchall()
-    
-    # Preenche campos virtuais para o Kotlin não crashar caso falte alguma coluna de texto
-    for h in historico:
-        h["evento_nome"] = "Viagem Finalizada"
-        h["horario"] = "Concluída"
+    # 🟢 CORRIGIDO: Faz JOIN com caronas para buscar os dados reais do evento do passageiro
+    try:
+        cursor.execute("""
+            SELECT 
+                c.evento_nome,
+                c.cidade_origem,
+                c.cidade_destino,
+                c.horario,
+                s.status
+            FROM solicitacoes s
+            JOIN caronas c ON s.carona_id = c.id
+            WHERE s.passageiro_cpf = %s AND s.status = 'Finalizado'
+            ORDER BY s.data_criacao DESC
+        """, (urllib.parse.unquote(cpf),))
         
-    cursor.close()
-    conexao.close()
-    return jsonify(historico), 200
+        historico = cursor.fetchall()
+        return jsonify(historico), 200
+    except Exception as e:
+        print(f"❌ Erro no histórico do passageiro: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
 
 @app.route("/historico_motorista_cpf/<cpf>", methods=["GET"])
 def listar_historico_motorista_por_cpf(cpf):
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # 🟢 CORRIGIDO: Busca as solicitações finalizadas associadas ao motorista
-    cursor.execute("""
-        SELECT id, carona_id, passageiro, status, data_criacao, passageiro_cpf 
-        FROM solicitacoes 
-        WHERE status = 'Finalizado'
-    """)
-    historico = cursor.fetchall()
-    
-    for h in historico:
-        h["evento_nome"] = "Corrida Realizada"
-        h["horario"] = "Concluída"
+    # 🟢 CORRIGIDO: Busca direto de caronas usando DISTINCT para trazer apenas os 6 eventos únicos do motorista, com dados completos
+    try:
+        cursor.execute("""
+            SELECT 
+                evento_nome,
+                cidade_origem,
+                cidade_destino,
+                horario,
+                status
+            FROM caronas
+            WHERE motorista_cpf = %s AND status = 'Finalizado'
+            ORDER BY id DESC
+        """, (urllib.parse.unquote(cpf),))
         
-    cursor.close()
-    conexao.close()
-    return jsonify(historico), 200
+        historico = cursor.fetchall()
+        return jsonify(historico), 200
+    except Exception as e:
+        print(f"❌ Erro no histórico do motorista: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 5000))
