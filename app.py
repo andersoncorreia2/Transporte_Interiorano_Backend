@@ -485,15 +485,37 @@ def validar_e_redefinir_senha():
     conexao.close()
     return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
 
-@app.route("/caronas", methods=["GET"])
-def listar_caronas():
+# 🟢 ATUALIZADO: Rota parametrizada para omitir caronas de passageiros recusados/bloqueados
+@app.route("/caronas/<cpf_passageiro>", methods=["GET"])
+def listar_caronas(cpf_passageiro):
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM caronas WHERE status = 'Aberta'") 
-    caronas_do_cofre = cursor.fetchall()
-    cursor.close()
-    conexao.close()
-    return jsonify(caronas_do_cofre)
+    
+    try:
+        # Puxa caronas Abertas, ocultando aquelas onde o passageiro foi recusado pessoalmente
+        cursor.execute("""
+            SELECT c.* FROM caronas c
+            WHERE c.status = 'Aberta'
+            AND NOT EXISTS (
+                SELECT 1 
+                FROM solicitacoes s 
+                WHERE s.carona_id = c.id 
+                AND s.passageiro_cpf = %s 
+                AND s.status LIKE 'Recusado%'
+            )
+            ORDER BY c.id DESC
+        """, (urllib.parse.unquote(cpf_passageiro),))
+        
+        caronas_limpas = cursor.fetchall()
+        return jsonify(caronas_limpas), 200
+    except Exception as e:
+        print(f"❌ Erro ao listar caronas filtradas: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 @app.route("/caronas", methods=["POST"])
 def criar_carona():
