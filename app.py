@@ -784,6 +784,63 @@ def listar_historico_motorista_por_cpf(cpf):
         cursor.close()
         conexao.close()
 
+@app.route("/cancelar_carona_geral", methods=["POST"])
+def cancelar_carona_geral():
+    dados = request.get_json()
+    carona_id = dados.get("carona_id")
+    motivo_cancelamento = dados.get("motivo", "Motivo de força maior")
+
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+
+    try:
+        # 1. Busca os dados do evento e os tokens FCM de TODOS os passageiros ativos vinculados a essa carona
+        cursor.execute("""
+            SELECT c.evento_nome, u.fcm_token 
+            FROM solicitacoes s
+            JOIN usuarios u ON s.passageiro_cpf = u.cpf
+            JOIN caronas c ON s.carona_id = c.id
+            WHERE s.carona_id = %s AND s.status IN ('Pendente', 'Aceito', 'Aprovado')
+        """, (carona_id,))
+        
+        passageiros_afetados = cursor.fetchall()
+
+        # Captura o nome da carona para compor o alerta
+        cursor.execute("SELECT evento_nome FROM caronas WHERE id = %s", (carona_id,))
+        carona_info = cursor.fetchone()
+        nome_evento = carona_info["evento_nome"] if carona_info else "Viagem"
+
+        # 2. Varre a lista disparando a notificação Push de estorno e cancelamento com som para cada celular
+        for pass_info in passageiros_afetados:
+            token = pass_info.get("fcm_token")
+            if token:
+                titulo_notif = f"⚠️ Viagem Cancelada: {nome_evento}"
+                corpo_notif = f"O motorista precisou cancelar. Motivo: {motivo_cancelamento}. O valor correspondente será ressarcido!"
+                enviar_notificacao(token, titulo_notif, corpo_notif)
+
+        # 3. Altera o status da carona para 'Cancelada' para sumir instantaneamente dos Eventos Disponíveis
+        cursor.execute("UPDATE caronas SET status = 'Cancelada' WHERE id = %s", (carona_id,))
+
+        # 4. Modifica os pedidos no banco para deixar registrado o histórico de auditoria e liberação financeira
+        cursor.execute("""
+            UPDATE solicitacoes 
+            SET status = %s 
+            WHERE carona_id = %s AND status != 'Finalizado'
+        """, (f"Cancelado: {motivo_cancelamento}", carona_id))
+
+        conexao.commit()
+        return jsonify({"mensagem": "Viagem derrubada com sucesso e passageiros alertados!"}), 200
+
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao processar cancelamento de emergência: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host="0.0.0.0", port=porta)
