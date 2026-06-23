@@ -633,15 +633,55 @@ def responder_solicitacao(id_solicitacao):
     status_recebido = dados.get("status")
     
     conexao = conectar_banco()
-    cursor = conexao.cursor()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
     try:
-        # 🟢 CORRIGIDO: Força o update de status com tratamento de exceção estruturado
+        # 1. Atualiza o status da solicitação no banco de dados
         cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status_recebido, id_solicitacao))
+        
+        # 2. Busca o CPF do passageiro vinculado a esta solicitação e o nome do evento
+        cursor.execute("""
+            SELECT s.passageiro_cpf, c.evento_nome 
+            FROM solicitacoes s
+            JOIN caronas c ON s.carona_id = c.id
+            WHERE s.id = %s
+        """, (id_solicitacao,))
+        resultado_sol = cursor.fetchone()
+        
+        if resultado_sol and resultado_sol.get("passageiro_cpf"):
+            cpf_pass = resultado_sol["passageiro_cpf"]
+            nome_evento = resultado_sol["evento_nome"]
+            
+            # 3. Busca o token FCM do passageiro para enviar a notificação
+            cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (cpf_pass,))
+            usuario_pass = cursor.fetchone()
+            
+            if usuario_pass and usuario_pass.get("fcm_token"):
+                token_fcm = usuario_pass["fcm_token"]
+                
+                # Trata o título e corpo com base na resposta do motorista
+                if "Aceito" in status_recebido:
+                    titulo_fcm = "✅ Vaga Garantida!"
+                    corpo_fcm = f"O motorista aceitou o seu pedido para o evento: {nome_evento}."
+                elif "Recusado" in status_recebido:
+                    titulo_fcm = "❌ Pedido Recusado"
+                    # Se houver um motivo detalhado (ex: Recusado: Sem vaga), extrai e exibe
+                    motivo = status_recebido.split(":", 1)[1].strip() if ":" in status_recebido else "Motivo particular."
+                    corpo_fcm = f"A sua solicitação para {nome_evento} foi recusada. Motivo: {motivo}"
+                else:
+                    titulo_fcm = "🔄 Atualização de Carona"
+                    corpo_fcm = f"O estado do seu pedido para {nome_evento} mudou para {status_recebido}."
+                
+                # Dispara a notificação com as diretrizes de som ativas
+                enviar_notificacao(token_fcm, titulo_fcm, corpo_fcm)
+
         conexao.commit()
-        return jsonify({"mensagem": "Status atualizado com sucesso!"}), 200
+        return jsonify({"mensagem": "Status atualizado e passageiro notificado com sucesso!"}), 200
     except Exception as e:
         conexao.rollback()
-        print(f"❌ Erro ao atualizar status: {e}")
+        print(f"❌ Erro ao atualizar status e notificar: {e}")
         return jsonify({"erro": str(e)}), 500
     finally:
         cursor.close()
