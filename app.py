@@ -99,6 +99,10 @@ def enviar_notificacao(token, titulo, corpo):
         
 def criar_tabelas():
     conexao = conectar_banco()
+    if not conexao:
+        print("⚠️ AVISO: Não foi possível estruturar as tabelas pois o banco de dados está offline. O servidor tentará operar assim mesmo.")
+        return # 🟢 EVITA O QUEBRA DO DEPLOY: Sai da função sem tentar chamar .cursor() se conexão for None
+        
     cursor = conexao.cursor()
     try:
         cursor.execute("""
