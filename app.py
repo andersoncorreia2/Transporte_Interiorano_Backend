@@ -14,6 +14,7 @@ from functools import wraps
 import random
 import smtplib
 from email.mime.text import MIMEText
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -55,7 +56,7 @@ def token_requerido(f):
 
         return f(*args, **kwargs)
     return decorated
-
+# 🟢 Alterado para usar um banco de dados totalmente separado dentro do seu computador para não mexer nos dados reais da rua
 def conectar_banco():
     DATABASE_URL = os.environ.get("DATABASE_URL")
     try:
@@ -130,8 +131,10 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_cadastro TEXT DEFAULT '15/06/2026';")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS corridas_realizadas INTEGER DEFAULT 0;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS passageiros_conduzidos INTEGER DEFAULT 0;")
-        # 🟢 ADICIONE ESTA LINHA LOGO ABAIXO NO SEU CRiAR_TABELAS:
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS vagas_ofertadas INTEGER DEFAULT 0;")
+        
+        # 🟢 ADIÇÃO DA COLUNA DE CONTROLE DE MODALIDADE (UBER VS BLA BLA CAR)
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS modalidade_ativa TEXT DEFAULT 'Programada';")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS caronas (
@@ -168,8 +171,26 @@ def criar_tabelas():
                 expiracao TIMESTAMP NOT NULL
             )
         """)
+
+        # 🟢 CRIAÇÃO DA NOVA TABELA PARA CORRIDAS EMERGENGIAIS (MODO UBER)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS corridas_emergentes (
+                id SERIAL PRIMARY KEY,
+                passageiro_cpf TEXT NOT NULL,
+                motorista_cpf TEXT,
+                origem_latitude NUMERIC NOT NULL,
+                origem_longitude NUMERIC NOT NULL,
+                destino_latitude NUMERIC NOT NULL,
+                destino_longitude NUMERIC NOT NULL,
+                endereco_origem TEXT,
+                endereco_destino TEXT,
+                status TEXT DEFAULT 'Procurando',
+                data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conexao.commit()
-        print("✅ Tabelas e colunas verificadas com sucesso!")
+        print("✅ Tabelas, colunas e modo emergencial verificados com sucesso!")
     except Exception as e:
         print(f"❌ Erro ao criar tabelas: {e}")
         conexao.rollback()
@@ -216,6 +237,37 @@ def verificar_usuario(username):
     conexao.close()
     return jsonify({"disponivel": False, "sugestoes": sugestoes}), 200
 
+@app.route("/usuarios/alterar_modalidade", methods=["POST"])
+@token_requerido
+def alterar_modalidade():
+    dados = request.get_json()
+    modalidade = dados.get("modalidade") # Deve receber 'Programada' ou 'Emergencial'
+    cpf_usuario = request.usuario_logado["cpf"]
+
+    if modalidade not in ['Programada', 'Emergencial']:
+        return jsonify({"erro": "Modalidade selecionada é inválida!"}), 400
+
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Banco de dados offline"}), 500
+        
+    cursor = conexao.cursor()
+    try:
+        cursor.execute("""
+            UPDATE usuarios 
+            SET modalidade_ativa = %s 
+            WHERE cpf = %s
+        """, (modalidade, cpf_usuario))
+        conexao.commit()
+        return jsonify({"mensagem": f"Modalidade alterada para {modalidade} com sucesso!"}), 200
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao atualizar modalidade: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
 @app.route("/usuarios", methods=["POST"])
 def cadastrar_usuario():
     dados = request.get_json()
@@ -223,9 +275,9 @@ def cadastrar_usuario():
     cursor = conexao.cursor()
     try:
         senha_criptografada = generate_password_hash(dados["senha"])
-        data_atual = datetime.now()
-        data_formatada = data_atual.strftime("%d/%m/%Y")
-        
+        # 🕒 MODIFICADO: Captura data_atual respeitando o fuso UTC de forma explícita
+        data_atual = datetime.now(timezone.utc)
+        data_formatada = data_atual.strftime("%d/%m/%Y")        
         email_salvar = dados["email"].strip().lower()
         usuario_salvar = dados["usuario"].strip().lower() # 🟢 NOVO CAMPO
         
@@ -387,7 +439,8 @@ def login():
                     print(f"⚠️ Erro ao atualizar hash: {e}")
 
     if is_valido:
-        tempo_expiracao = datetime.utcnow() + timedelta(hours=24)
+        # 🕒 MODIFICADO: Token JWT agora calcula expiração baseando-se no tempo UTC explícito
+        tempo_expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
         token = jwt.encode(
             {"email": usuario["email"], "cpf": usuario["cpf"], "usuario": usuario["usuario"], "exp": tempo_expiracao},
             JWT_SECRET,
@@ -446,7 +499,8 @@ def solicitar_codigo():
         return jsonify({"erro": "E-mail ou CPF não encontrados no sistema."}), 404
 
     codigo = str(random.randint(100000, 999999))
-    expiracao = datetime.now() + timedelta(minutes=10)
+    # 🕒 MODIFICADO: Código de recuperação com expiração em timezone UTC explícito
+    expiracao = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     cursor.execute("""
         INSERT INTO codigos_recuperacao (email, codigo, expiracao)
@@ -476,7 +530,8 @@ def validar_e_redefinir_senha():
     cursor.execute("SELECT codigo, expiracao FROM codigos_recuperacao WHERE email = %s", (email,))
     registro = cursor.fetchone()
 
-    if not registro or registro["codigo"] != str(codigo).strip() or datetime.now() > registro["expiracao"]:
+    # 🕒 MODIFICADO: Validação comparando com o datetime.now(timezone.utc)
+    if not registro or registro["codigo"] != str(codigo).strip() or datetime.now(timezone.utc) > registro["expiracao"]:
         cursor.close()
         conexao.close()
         return jsonify({"erro": "Código de verificação incorreto ou expirado!"}), 400
@@ -573,7 +628,8 @@ def listar_solicitacoes():
     cursor.execute("SELECT * FROM solicitacoes")
     solicitacoes_do_cofre = cursor.fetchall()
     lista_solicitacoes = []
-    agora = datetime.now()
+    # 🕒 MODIFICADO: Captura o momento atual de comparação em fuso UTC explícito
+    agora = datetime.now(timezone.utc)
 
     for sol in solicitacoes_do_cofre:
         status = sol["status"]
@@ -609,12 +665,11 @@ def pedir_carona():
     carona = cursor.fetchone()
     
     if carona:
-        # 🟢 CORRIGIDO: O valor absoluto das vagas na tabela caronas FICA FIXO (ex: 4).
-        # Apenas gravamos a solicitação como Pendente. O Kotlin deduz dinamicamente.
+        # 🕒 MODIFICADO: Insere o registro marcando o data_criacao inicial em fuso UTC explícito
         cursor.execute("""
             INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
             VALUES (%s, %s, %s, %s, %s)
-        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now()))
+        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now(timezone.utc)))
         
         # Envia a notificação FCM para o motorista dono da carona
         cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (carona["motorista_cpf"],))
@@ -630,6 +685,161 @@ def pedir_carona():
     cursor.close()
     conexao.close()
     return jsonify({"erro": "Carona inexistente."}), 400
+
+@app.route("/corridas/emergentes", methods=["POST"])
+@token_requerido
+def criar_corrida_emergente():
+    dados = request.get_json()
+    passageiro_cpf = request.usuario_logado["cpf"]
+    
+    # O Kotlin vai mandar as coordenadas exatas de onde o passageiro está e para onde vai
+    origem_lat = dados.get("origem_latitude")
+    origem_lng = dados.get("origem_longitude")
+    destino_lat = dados.get("destino_latitude")
+    destino_lng = dados.get("destino_longitude")
+    end_origem = dados.get("endereco_origem", "")
+    end_destino = dados.get("endereco_destino", "")
+
+    if not all([origem_lat, origem_lng, destino_lat, destino_lng]):
+        return jsonify({"erro": "Coordenadas de origem e destino são obrigatórias!"}), 400
+
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+        
+    cursor = conexao.cursor()
+    try:
+        # Insere a corrida com o status 'Procurando' e grava o horário exato em UTC
+        cursor.execute("""
+            INSERT INTO corridas_emergentes (
+                passageiro_cpf, origem_latitude, origem_longitude, 
+                destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, data_criacao
+            ) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Procurando', %s)
+            RETURNING id
+        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, end_origem, end_destino, datetime.now(timezone.utc)))
+        
+        corrida_id = cursor.fetchone()[0]
+        conexao.commit()
+        
+        print(f"⚡ CORRIDA EMERGENTE CRIADA! ID: {corrida_id} | Passageiro: {passageiro_cpf}")
+        return jsonify({"mensagem": "Procurando motoristas parceiros próximos...", "corrida_id": corrida_id}), 201
+        
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao criar corrida emergente: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
+@app.route("/corridas/emergentes/disponiveis", methods=["GET"])
+@token_requerido
+def listar_corridas_emergentes_proximas():
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+    
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    agora = datetime.now(timezone.utc)
+    
+    try:
+        # 1. Primeiro fazemos a varredura do relógio (Card de Tempo de 60 segundos)
+        # Qualquer corrida 'Procurando' com mais de 1 minuto vira 'Expirada'
+        cursor.execute("SELECT id, data_criacao FROM corridas_emergentes WHERE status = 'Procurando'")
+        corridas_ativas = cursor.fetchall()
+        
+        for corrida in corridas_ativas:
+            # Garante que a data do banco venha com a marcação de timezone para comparar certo
+            data_criacao = corrida["data_criacao"]
+            if data_criacao.tzinfo is None:
+                data_criacao = data_criacao.replace(tzinfo=timezone.utc)
+                
+            if (agora - data_criacao) > timedelta(seconds=60):
+                cursor.execute("UPDATE corridas_emergentes SET status = 'Expirada' WHERE id = %s", (corrida["id"],))
+        
+        conexao.commit()
+        
+        # 2. Agora buscamos apenas as que sobreviveram ao tempo e ainda estão ativas
+        cursor.execute("""
+            SELECT * FROM corridas_emergentes 
+            WHERE status = 'Procurando' 
+            ORDER BY data_criacao DESC
+        """)
+        corridas_validas = cursor.fetchall()
+        
+        # Como o PostgreSQL não converte Decimal automaticamente para o JSON do Flask, 
+        # transformamos as latitudes e longitudes em Float comuns para o Kotlin ler sem erro
+        lista_final = []
+        for c in corridas_validas:
+            lista_final.append({
+                "id": c["id"],
+                "passageiro_cpf": c["passageiro_cpf"],
+                "origem_latitude": float(c["origem_latitude"]),
+                "origem_longitude": float(c["origem_longitude"]),
+                "destino_latitude": float(c["destino_latitude"]),
+                "destino_longitude": float(c["destino_longitude"]),
+                "endereco_origem": c["endereco_origem"],
+                "endereco_destino": c["endereco_destino"],
+                "status": c["status"]
+            })
+            
+        return jsonify(lista_final), 200
+        
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao listar corridas emergentes: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
+@app.route("/corridas/emergentes/aceitar/<int:corrida_id>", methods=["PUT"])
+@token_requerido
+def aceitar_corrida_emergente(corrida_id):
+    motorista_cpf = request.usuario_logado["cpf"]
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+        
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Verifica se a corrida ainda está disponível ou se já expirou/foi aceita por outro
+        cursor.execute("SELECT status, passageiro_cpf FROM corridas_emergentes WHERE id = %s", (corrida_id,))
+        corrida = cursor.fetchone()
+        
+        if not corrida:
+            return jsonify({"erro": "Corrida não encontrada!"}), 404
+            
+        if corrida["status"] == "Expirada":
+            return jsonify({"erro": "O tempo limite acabou! Essa corrida expirou."}), 400
+            
+        if corrida["status"] != "Procurando":
+            return jsonify({"erro": "Essa corrida já foi aceita por outro motorista!"}), 400
+
+        # Atualiza a corrida vinculando o motorista
+        cursor.execute("""
+            UPDATE corridas_emergentes 
+            SET status = 'Aceita', motorista_cpf = %s 
+            WHERE id = %s
+        """, (motorista_cpf, corrida_id))
+        
+        # Envia uma notificação FCM para o passageiro avisando que o motorista está a caminho
+        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (corrida["passageiro_cpf"],))
+        passageiro = cursor.fetchone()
+        if passageiro and passageiro.get("fcm_token"):
+            enviar_notificacao(passageiro["fcm_token"], "⚡ Motorista a Caminho!", "Sua corrida de emergência foi aceita e o veículo já está se deslocando.")
+
+        conexao.commit()
+        return jsonify({"mensagem": "Corrida aceita com sucesso! Prossiga para o local de embarque."}), 200
+        
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao aceitar corrida emergente: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 @app.route("/solicitacoes/<int:id_solicitacao>", methods=["PUT"])
 def responder_solicitacao(id_solicitacao):
@@ -889,4 +1099,4 @@ def cancelar_carona_geral():
 
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host="0.0.0.0", port=porta)
+    app.run(debug=True, host="0.0.0.0", port=porta)
