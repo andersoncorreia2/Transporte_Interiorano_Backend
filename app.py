@@ -1,6 +1,6 @@
 import os
 import urllib.parse
-import psycopg2 
+import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2 import IntegrityError
 from flask import Flask, jsonify, request
@@ -15,6 +15,7 @@ import random
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime, timezone
+
 
 app = Flask(__name__)
 
@@ -58,8 +59,16 @@ def token_requerido(f):
     return decorated
 # 🟢 Alterado para usar um banco de dados totalmente separado dentro do seu computador para não mexer nos dados reais da rua
 def conectar_banco():
+    # Se estiver rodando no Render, ele usa a variável de ambiente original deles
     DATABASE_URL = os.environ.get("DATABASE_URL")
+    
+    # SE ESTIVER RODANDO LOCAL NO SEU VS CODE (Variável vazia), usamos a string externa do Render direto!
+    if not DATABASE_URL:
+        # 💡 ADICIONADO: ?sslmode=require no final da string para o Render aceitar
+        DATABASE_URL = "postgresql://transporte_db_novo_user:FS385qeaMpIzyZliHuIuQQaw1YwES5HM@dpg-d8t2n80js32c73d3pov0-a.oregon-postgres.render.com/transporte_db_novo?sslmode=require"
+        
     try:
+        # Abre a conexão com o banco Postgres do Render
         conexao = psycopg2.connect(DATABASE_URL)
         return conexao
     except Exception as e:
@@ -70,12 +79,15 @@ def conectar_banco():
 def registrar_token():
     dados = request.get_json()
     conexao = conectar_banco()
-    cursor = conexao.cursor()
+    if not conexao:
+        return jsonify({"erro": "Banco de dados offline!"}), 500
+        
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
     cursor.execute("UPDATE usuarios SET fcm_token = %s WHERE email = %s", (dados["token"], dados["email"]))
     conexao.commit()
     cursor.close()
     conexao.close()
-    return jsonify({"mensagem": "Token salvo"}), 200
+    return jsonify({"mensagem": "Token saved"}), 200
 
 def enviar_notificacao(token, titulo, corpo):
     try:
@@ -206,36 +218,43 @@ def verificar_usuario(username):
     user_limpo = username.strip().lower()
     if len(user_limpo) < 3:
         return jsonify({"disponivel": False, "sugestoes": []}), 200
-        
+
     conexao = conectar_banco()
-    cursor = conexao.cursor()
-    cursor.execute("SELECT usuario FROM usuarios WHERE LOWER(usuario) = %s", (user_limpo,))
-    existe = cursor.fetchone()
-    
-    if not existe:
+    if not conexao:
+        return jsonify({"disponivel": False, "sugestoes": []}), 500
+
+    try:
+        # 💡 CORREÇÃO 1: Usar RealDictCursor para manter o padrão do seu banco
+        cursor = conexao.cursor(cursor_factory=RealDictCursor)
+        
+        # Verifica se o usuário principal existe
+        cursor.execute("SELECT usuario FROM usuarios WHERE LOWER(usuario) = %s", (user_limpo,))
+        existe = cursor.fetchone()
+
+        if not existe:
+            return jsonify({"disponivel": True, "sugestoes": []}), 200
+
+        # Se o usuário já existe, gera exatamente 3 sugestões válidas
+        sugestoes = []
+        tentativas = 0
+        
+        while len(sugestoes) < 3 and tentativas < 20:
+            tentativas += 1
+            sugestao = f"{user_limpo}{random.randint(10, 99)}"
+            
+            cursor.execute("SELECT 1 FROM usuarios WHERE LOWER(usuario) = %s", (sugestao,))
+            if not cursor.fetchone():
+                if sugestao not in sugestoes:  # 🌟 CORRIGIDO: Sintaxe correta em Python
+                    sugestoes.append(sugestao)
+
+        return jsonify({"disponivel": False, "sugestoes": sugestoes}), 200  # 🌟 CORRIGIDO: Nome da variável consertado
+
+    except Exception as e:
+        print(f"❌ Erro na rota verificar_usuario: {e}")
+        return jsonify({"disponivel": False, "sugestoes": []}), 500
+    finally:
         cursor.close()
         conexao.close()
-        return jsonify({"disponivel": True, "sugestoes": []}), 200
-    
-    # Se já existir, cria 3 alternativas válidas no banco de dados para sugerir
-    sugestoes = []
-    while len(sugestoes) < 3:
-        numero_aleatorio = random.randint(10, 999)
-        prefixos = ["", "id_", "user_"]
-        escolha = random.choice(prefixos)
-        
-        if escolha == "":
-            tentativa = f"{user_limpo}{numero_aleatorio}"
-        else:
-            tentativa = f"{escolha}{user_limpo}"
-            
-        cursor.execute("SELECT usuario FROM usuarios WHERE LOWER(usuario) = %s", (tentativa,))
-        if not cursor.fetchone() and tentativa not in sugestoes:
-            sugestoes.append(tentativa)
-            
-    cursor.close()
-    conexao.close()
-    return jsonify({"disponivel": False, "sugestoes": sugestoes}), 200
 
 @app.route("/usuarios/alterar_modalidade", methods=["POST"])
 @token_requerido
@@ -272,14 +291,19 @@ def alterar_modalidade():
 def cadastrar_usuario():
     dados = request.get_json()
     conexao = conectar_banco()
-    cursor = conexao.cursor()
+    
+    # 🟢 VERIFICAÇÃO DE SEGURANÇA: Se o banco estiver fora do ar, avisa o app na hora
+    if not conexao:
+        return jsonify({"erro": "Banco de dados offline ou inacessível no momento!"}), 500
+        
+    # 🟢 CURSOR CORRETO: Abre o cursor com RealDictCursor para o Postgres do Render funcionar
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)   
     try:
         senha_criptografada = generate_password_hash(dados["senha"])
-        # 🕒 MODIFICADO: Captura data_atual respeitando o fuso UTC de forma explícita
         data_atual = datetime.now(timezone.utc)
         data_formatada = data_atual.strftime("%d/%m/%Y")        
         email_salvar = dados["email"].strip().lower()
-        usuario_salvar = dados["usuario"].strip().lower() # 🟢 NOVO CAMPO
+        usuario_salvar = dados["usuario"].strip().lower()
         
         cursor.execute("""
             INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro, usuario)
@@ -407,59 +431,64 @@ def excluir_conta(email_seguro):
 def login():
     dados = request.get_json()
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Banco de dados offline"}), 500
+        
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    cursor.execute("""
-        SELECT nome, cpf, email, usuario, telefone, veiculo, placa, vagas, 
-               rua, numero, complemento, bairro, cidade, estado, cep, senha, data_cadastro 
-        FROM usuarios 
-        WHERE LOWER(usuario) = %s
-    """, (dados["usuario"].strip().lower(),))
+    try:
+        cursor.execute("""
+            SELECT nome, cpf, email, usuario, telefone, veiculo, placa, vagas, 
+                   rua, numero, complemento, bairro, cidade, estado, cep, senha, data_cadastro 
+            FROM usuarios 
+            WHERE LOWER(usuario) = %s
+        """, (dados["usuario"].strip().lower(),))
 
-    usuario = cursor.fetchone()
-    cursor.close()
-    conexao.close()
+        usuario = cursor.fetchone()
 
-    is_valido = False
-    if usuario:
-        if usuario["senha"].startswith(("pbkdf2:", "scrypt:", "bcrypt:")):
-            is_valido = check_password_hash(usuario["senha"], dados["senha"])
+        is_valido = False
+        if usuario:
+            if usuario["senha"].startswith(("pbkdf2:", "scrypt:", "bcrypt:")):
+                is_valido = check_password_hash(usuario["senha"], dados["senha"])
+            else:
+                is_valido = (usuario["senha"] == dados["senha"])
+                if is_valido:
+                    try:
+                        # 💡 REUTILIZANDO O CURSOR EXISTENTE: Evita abrir nova conexão e quebrar o SSL
+                        novo_hash_seguro = generate_password_hash(dados["senha"])
+                        cursor.execute("UPDATE usuarios SET senha = %s WHERE cpf = %s", (novo_hash_seguro, usuario["cpf"]))
+                        conexao.commit()
+                    except Exception as migration_error:
+                        print(f"⚠️ Erro ao atualizar hash: {migration_error}")
+
+        if is_valido:
+            tempo_expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
+            token = jwt.encode(
+                {"email": usuario["email"], "cpf": usuario["cpf"], "usuario": usuario["usuario"], "exp": tempo_expiracao},
+                JWT_SECRET,
+                algorithm="HS256"
+            )
+            return jsonify({
+                "token": token,
+                "usuario": {
+                    "nome": usuario["nome"], "cpf": usuario["cpf"], "email": usuario["email"], "usuario": usuario["usuario"],
+                    "telefone": usuario["telefone"], "veiculo": usuario.get("veiculo", ""),
+                    "placa": usuario.get("placa", ""), "vagas": usuario.get("vagas", "0"),
+                    "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
+                    "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
+                    "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", ""),
+                    "data_cadastro": usuario.get("data_cadastro", "15/06/2026")
+                }
+            }), 200
         else:
-            is_valido = (usuario["senha"] == dados["senha"])
-            if is_valido:
-                try:
-                    conn_migrar = conectar_banco()
-                    curr_migrar = conn_migrar.cursor()
-                    novo_hash_seguro = generate_password_hash(dados["senha"])
-                    curr_migrar.execute("UPDATE usuarios SET senha = %s WHERE cpf = %s", (novo_hash_seguro, usuario["cpf"]))
-                    conn_migrar.commit()
-                    curr_migrar.close()
-                    conn_migrar.close()
-                except Exception as e:
-                    print(f"⚠️ Erro ao atualizar hash: {e}")
-
-    if is_valido:
-        # 🕒 MODIFICADO: Token JWT agora calcula expiração baseando-se no tempo UTC explícito
-        tempo_expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
-        token = jwt.encode(
-            {"email": usuario["email"], "cpf": usuario["cpf"], "usuario": usuario["usuario"], "exp": tempo_expiracao},
-            JWT_SECRET,
-            algorithm="HS256"
-        )
-        return jsonify({
-            "token": token,
-            "usuario": {
-                "nome": usuario["nome"], "cpf": usuario["cpf"], "email": usuario["email"], "usuario": usuario["usuario"],
-                "telefone": usuario["telefone"], "veiculo": usuario.get("veiculo", ""),
-                "placa": usuario.get("placa", ""), "vagas": usuario.get("vagas", "0"),
-                "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
-                "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
-                "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", ""),
-                "data_cadastro": usuario.get("data_cadastro", "15/06/2026")
-            }
-        }), 200
-    else:
-        return jsonify({"erro": "Nome de usuário ou senha incorretos"}), 401
+            return jsonify({"erro": "Nome de usuário ou senha incorretos"}), 401
+            
+    except Exception as e:
+        print(f"❌ Erro na rota de login: {e}")
+        return jsonify({"erro": "Erro interno no servidor"}), 500
+    finally:
+        cursor.close()
+        conexao.close()
     
 @app.route("/solicitar_codigo", methods=["POST"])
 def solicitar_codigo():
