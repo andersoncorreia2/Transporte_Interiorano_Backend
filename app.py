@@ -1126,6 +1126,78 @@ def cancelar_carona_geral():
         cursor.close()
         conexao.close()
 
+# 🟢 NOVA ROTA 1: PASSAGEIRO MONITORAR O STATUS DO CHAMADO ATIVO
+@app.route("/corridas/emergentes/status/<int:corrida_id>", methods=["GET"])
+@token_requerido
+def monitorar_status_corrida(corrida_id):
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Busca a corrida e traz os dados básicos do veículo/motorista associado (se houver)
+        cursor.execute("""
+            SELECT c.*, u.nome as motorista_nome, u.veiculo, u.placa 
+            FROM corridas_emergentes c
+            LEFT JOIN usuarios u ON c.motorista_cpf = u.cpf
+            WHERE c.id = %s
+        """, (corrida_id,))
+        corrida = cursor.fetchone()
+        if not corrida:
+            return jsonify({"erro": "Corrida não encontrada!"}), 404
+            
+        return jsonify({
+            "id": corrida["id"],
+            "status": corrida["status"],
+            "motorista_nome": corrida.get("motorista_nome", ""),
+            "veiculo": corrida.get("veiculo", ""),
+            "placa": corrida.get("placa", ""),
+            "origem_latitude": float(corrida["origem_latitude"]),
+            "origem_longitude": float(corrida["origem_longitude"]),
+            "destino_latitude": float(corrida["destino_latitude"]),
+            "destino_longitude": float(corrida["destino_longitude"])
+        }), 200
+    finally:
+        cursor.close()
+        conexao.close()
+
+# 🟢 NOVA ROTA 2: CANCELAMENTO INTELIGENTE (REABRE A CORRIDA PARA OUTROS MOTORISTAS)
+@app.route("/corridas/emergentes/cancelar/<int:corrida_id>", methods=["DELETE"])
+@token_requerido
+def cancelar_ou_reabrir_corrida(corrida_id):
+    conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("SELECT status FROM corridas_emergentes WHERE id = %s", (corrida_id,))
+        corrida = cursor.fetchone()
+        if not corrida:
+            return jsonify({"erro": "Corrida inexistente"}), 404
+
+        # REGRA DE NEGÓCIO SEU: Se o motorista já tinha aceitado mas está demorando, 
+        # a corrida REABRE ('Procurando') limpando o motorista antigo para que outro pegue!
+        if corrida["status"] == "Aceita":
+            cursor.execute("""
+                UPDATE corridas_emergentes 
+                SET status = 'Procurando', motorista_cpf = NULL 
+                WHERE id = %s
+            """, (corrida_id,))
+            mensagem_retorno = "Corrida reaberta no radar de Paulista para novos motoristas!"
+        else:
+            # Se ainda estava procurando, cancela de forma definitiva
+            cursor.execute("UPDATE corridas_emergentes SET status = 'Cancelada' WHERE id = %s", (corrida_id,))
+            mensagem_retorno = "Corrida cancelada com sucesso!"
+
+        conexao.commit()
+        return jsonify({"mensagem": mensagem_retorno}), 200
+    except Exception as e:
+        conexao.rollback()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 5000))
     app.run(debug=True, host="0.0.0.0", port=porta)
