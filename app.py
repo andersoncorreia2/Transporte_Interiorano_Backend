@@ -649,36 +649,52 @@ def deletar_carona(id_carona):
 @app.route("/solicitacoes", methods=["GET"])
 def listar_solicitacoes():
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+        
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("DELETE FROM solicitacoes WHERE status = 'Expirado'")
-    conexao.commit()
-    
-    # 🟢 CORRIGIDO: Seleciona todos os registros para manter o histórico visível no DBeaver e no App
-    cursor.execute("SELECT * FROM solicitacoes")
-    solicitacoes_do_cofre = cursor.fetchall()
-    lista_solicitacoes = []
-    # 🕒 MODIFICADO: Captura o momento atual de comparação em fuso UTC explícito
     agora = datetime.now(timezone.utc)
-
-    for sol in solicitacoes_do_cofre:
-        status = sol["status"]
-        if status == "Pendente" and sol["data_criacao"]:
-            if (agora - sol["data_criacao"]) > timedelta(minutes=15):
-                status = "Expirado"
-                cursor.execute("UPDATE solicitacoes SET status = %s WHERE id = %s", (status, sol["id"]))
-                conexao.commit()
+    
+    try:
+        # 🕒 SISTEMA PROGRAMADO (CARONA): Busca apenas solicitações 'Pendente' para validar os 15 minutos
+        cursor.execute("SELECT id, status, data_criacao FROM solicitacoes WHERE status = 'Pendente'")
+        pendentes = cursor.fetchall()
+        
+        for sol in pendentes:
+            data_criacao = sol["data_criacao"]
+            # Sincroniza o fuso horário para evitar o erro de colisão de datas no Python
+            if data_criacao and data_criacao.tzinfo is None:
+                data_criacao = data_criacao.replace(tzinfo=timezone.utc)
                 
-        # 🟢 CORRIGIDO: Garante o envio do objeto completo preenchido para o radar do Kotlin
-        lista_solicitacoes.append({
-            "id": sol["id"], 
-            "carona_id": sol["carona_id"], 
-            "passageiro": sol["passageiro"], 
-            "status": status,
-            "passageiro_cpf": sol.get("passageiro_cpf", "")
-        })
-    cursor.close()
-    conexao.close()
-    return jsonify(lista_solicitacoes), 200
+            # Se estourar os 15 minutos sem confirmação, o passageiro perde a vaga (Expirado)
+            if data_criacao and (agora - data_criacao) > timedelta(minutes=15):
+                cursor.execute("UPDATE solicitacoes SET status = 'Expirado' WHERE id = %s", (sol["id"],))
+        
+        conexao.commit()
+        
+        # Retorna a listagem padrão contendo as alterações para o Kotlin atualizar a interface
+        cursor.execute("SELECT * FROM solicitacoes")
+        solicitacoes_do_cofre = cursor.fetchall()
+        
+        lista_final = []
+        for sol in solicitacoes_do_cofre:
+            lista_final.append({
+                "id": sol["id"], 
+                "carona_id": sol["carona_id"], 
+                "passageiro": sol["passageiro"], 
+                "status": sol["status"],
+                "passageiro_cpf": sol.get("passageiro_cpf", "")
+            })
+            
+        return jsonify(lista_final), 200
+        
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro no relógio da Viagem Programada: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 @app.route("/solicitacoes", methods=["POST"])
 def pedir_carona():
