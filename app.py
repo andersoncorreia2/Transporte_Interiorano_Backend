@@ -751,6 +751,16 @@ def pedir_carona():
         motorista = cursor.fetchone()
         if motorista and motorista.get("fcm_token"):
             enviar_notificacao(motorista["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
+
+        # 🟢 NOVO: Busca o token do próprio passageiro para confirmar o início do cronômetro
+        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (cpf_passageiro,))
+        passageiro = cursor.fetchone()
+        if passageiro and passageiro.get("fcm_token"):
+            enviar_notificacao(
+                passageiro["fcm_token"], 
+                "⏳ Reserva Iniciada!", 
+                "Você tem 15 minutos para confirmar o pagamento e garantir sua vaga."
+            )
             
         conexao.commit()
         return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
@@ -955,8 +965,12 @@ def responder_solicitacao(id_solicitacao):
                 
                 # Trata o título e o corpo com base na resposta do motorista
                 if "Aceito" in status_recebido:
+                    cursor.execute("SELECT motorista FROM caronas WHERE id = %s", (resultado_sol["carona_id"],))
+                    carona_info = cursor.fetchone()
+                    nome_mot = carona_info["motorista"] if carona_info else "O motorista"
+
                     titulo_fcm = "✅ Vaga Garantida!"
-                    corpo_fcm = f"O motorista aceitou o seu pedido para o evento: {nome_evento}."
+                    corpo_fcm = f"{nome_mot} aceitou o seu pedido para o evento: {nome_evento}."
                 elif "Recusado" in status_recebido:
                     titulo_fcm = "❌ Pedido Recusado"
                     # Separação de string amigável para evitar estouro de índice (IndexError)
