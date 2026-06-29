@@ -720,33 +720,48 @@ def pedir_carona():
     cpf_passageiro = dados.get("passageiro_cpf")
     
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+        
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
-    # Busca para validar a carona e capturar o motorista correspondente
-    cursor.execute("SELECT vagas, motorista_cpf FROM caronas WHERE id = %s", (carona_id,))
-    carona = cursor.fetchone()
-    
-    if carona:
-        # 🕒 MODIFICADO: Insere o registro marcando o data_criacao inicial em fuso UTC explícito
+    try:
+        # Verifica se o evento existe e tem vagas
+        cursor.execute("SELECT vagas, motorista_cpf FROM caronas WHERE id = %s", (carona_id,))
+        carona = cursor.fetchone()
+        
+        if not carona:
+            return jsonify({"erro": "Carona inexistente."}), 400
+
+        # 🟢 CORREÇÃO CRÍTICA: Se já existir um pedido 'Expirado', nós removemos ou atualizamos 
+        # para que o banco não barra a nova tentativa por chaves duplicadas ou travas lógicas
+        cursor.execute("""
+            DELETE FROM solicitacoes 
+            WHERE carona_id = %s AND passageiro_cpf = %s AND status = 'Expirado'
+        """, (carona_id, cpf_passageiro))
+
+        # Insere o novo pedido limpo voltando ao fuso horário correto
         cursor.execute("""
             INSERT INTO solicitacoes (carona_id, passageiro, passageiro_cpf, status, data_criacao) 
-            VALUES (%s, %s, %s, %s, %s)
-        """, (carona_id, dados["passageiro"], cpf_passageiro, "Pendente", datetime.now(timezone.utc)))
+            VALUES (%s, %s, %s, 'Pendente', %s)
+        """, (carona_id, dados["passageiro"], cpf_passageiro, datetime.now(timezone.utc)))
         
-        # Envia a notificação FCM para o motorista dono da carona
+        # Envia a notificação FCM para o motorista
         cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (carona["motorista_cpf"],))
         motorista = cursor.fetchone()
         if motorista and motorista.get("fcm_token"):
             enviar_notificacao(motorista["fcm_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
             
         conexao.commit()
-        cursor.close()
-        conexao.close()
         return jsonify({"mensagem": "Pedido registrado com sucesso!"}), 201
 
-    cursor.close()
-    conexao.close()
-    return jsonify({"erro": "Carona inexistente."}), 400
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao solicitar vaga novamente: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
 
 @app.route("/corridas/emergentes", methods=["POST"])
 @token_requerido
