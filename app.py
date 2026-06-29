@@ -555,23 +555,40 @@ def validar_e_redefinir_senha():
     nova_senha = dados.get("senha")
 
     conexao = conectar_banco()
+    if not conexao:
+        return jsonify({"erro": "Falha na conexão com o banco"}), 500
+        
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT codigo, expiracao FROM codigos_recuperacao WHERE email = %s", (email,))
-    registro = cursor.fetchone()
+    try:
+        cursor.execute("SELECT codigo, expiracao FROM codigos_recuperacao WHERE email = %s", (email,))
+        registro = cursor.fetchone()
 
-    # 🕒 MODIFICADO: Validação comparando com o datetime.now(timezone.utc)
-    if not registro or registro["codigo"] != str(codigo).strip() or datetime.now(timezone.utc) > registro["expiracao"]:
+        if not registro:
+            return jsonify({"erro": "Código de verificação incorreto ou expirado!"}), 400
+
+        # 🕒 CORREÇÃO DO FUSO HORÁRIO: Sincroniza a expiração do banco com o fuso UTC do servidor
+        expiracao_banco = registro["expiracao"]
+        if expiracao_banco and expiracao_banco.tzinfo is None:
+            expiracao_banco = expiracao_banco.replace(tzinfo=timezone.utc)
+
+        # Agora a comparação roda 100% segura e sem erros
+        if registro["codigo"] != str(codigo).strip() or datetime.now(timezone.utc) > expiracao_banco:
+            return jsonify({"erro": "Código de verificação incorreto ou expirado!"}), 400
+
+        nova_senha_hash = generate_password_hash(nova_senha)
+        cursor.execute("UPDATE usuarios SET senha = %s WHERE email = %s", (nova_senha_hash, email))
+        cursor.execute("DELETE FROM codigos_recuperacao WHERE email = %s", (email,))
+        conexao.commit()
+        
+        return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
+        
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao redefinir senha: {e}")
+        return jsonify({"erro": "Erro interno ao processar redefinição."}), 500
+    finally:
         cursor.close()
         conexao.close()
-        return jsonify({"erro": "Código de verificação incorreto ou expirado!"}), 400
-
-    nova_senha_hash = generate_password_hash(nova_senha)
-    cursor.execute("UPDATE usuarios SET senha = %s WHERE email = %s", (nova_senha_hash, email))
-    cursor.execute("DELETE FROM codigos_recuperacao WHERE email = %s", (email,))
-    conexao.commit()
-    cursor.close()
-    conexao.close()
-    return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
 
 # 🟢 ATUALIZADO: Rota parametrizada para omitir caronas de passageiros recusados/bloqueados
 @app.route("/caronas/<cpf_passageiro>", methods=["GET"])
