@@ -210,7 +210,9 @@ def listar_corridas_emergentes_proximas():
             data_criacao = corrida["data_criacao"]
             if data_criacao.tzinfo is None:
                 data_criacao = data_criacao.replace(tzinfo=timezone.utc)
-            if (agora - data_criacao) > timedelta(seconds=60):
+            # 🟢 ALTERAÇÃO CIRÚRGICA: Aumentado para 10 minutos (600 segundos) para a conexão não cair de imediato,
+            # permitindo que novos motoristas vejam o chamado se um parceiro recusar!
+            if (agora - data_criacao) > timedelta(seconds=600):
                 cursor.execute("UPDATE corridas_emergentes SET status = 'Expirada' WHERE id = %s", (corrida["id"],))
         conexao.commit()
         
@@ -376,12 +378,13 @@ def cancelar_ou_reabrir_corrida(corrida_id):
         if usuario_cpf != corrida["passageiro_cpf"] and usuario_cpf != corrida["motorista_cpf"]:
             return jsonify({"erro": "Ação não autorizada."}), 403
 
+        # 🟢 ALTERAÇÃO CIRÚRGICA: Se for cancelada dentro da tolerância, muda para o status definitivo correto
         if corrida["status"] == "Aceita":
-            cursor.execute("UPDATE corridas_emergentes SET status = 'Procurando', motorista_cpf = NULL WHERE id = %s", (corrida_id,))
-            msg = "Corrida reaberta!"
+            cursor.execute("UPDATE corridas_emergentes SET status = 'Cancelada pelo passageiro', motorista_cpf = NULL WHERE id = %s", (corrida_id,))
+            msg = "Corrida cancelada pelo passageiro!"
         else:
-            cursor.execute("UPDATE corridas_emergentes SET status = 'Cancelada' WHERE id = %s", (corrida_id,))
-            msg = "Corrida cancelada!"
+            cursor.execute("UPDATE corridas_emergentes SET status = 'Cancelada pelo passageiro' WHERE id = %s", (corrida_id,))
+            msg = "Corrida cancelada pelo passageiro!"
         conexao.commit()
         return jsonify({"mensagem": msg}), 200
     except Exception as e:
