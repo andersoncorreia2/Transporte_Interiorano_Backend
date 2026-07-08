@@ -266,7 +266,7 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
             # --- 🔥 NOVO FLUXO DE DISPARO VIA API DO BREVO ---
             try:
                 # 🔒 Segurança: Busca a chave das variáveis do Render, com fallback local
-                api_key = os.environ.get("BREVO_API_KEY", "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")
+                api_key = os.environ.get("BREVO_API_KEY")
                 
                 url = "https://api.api.brevo.com/v3/smtp/email" if "api.api.brevo" in api_key else "https://api.brevo.com/v3/smtp/email"
                 
