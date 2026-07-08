@@ -393,7 +393,7 @@ def cancelar_ou_reabrir_corrida(corrida_id):
     finally:
         cursor.close()
         conexao.close()
-
+        
 # =====================================================================
 # 🔌 PLUGUES DOS CONTROLADORES EXTERNOS (MVC)
 # =====================================================================

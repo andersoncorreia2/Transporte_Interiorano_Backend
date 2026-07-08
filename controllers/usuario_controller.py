@@ -270,7 +270,7 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
     @app.route("/validar_e_redefinir_senha", methods=["POST"])
     def validar_e_redefinir_senha():
         dados = request.get_json()
-        email = dados.get("email")
+        email = dados.get("email", "").strip().lower()
         codigo = dados.get("codigo")
         nova_senha = dados.get("senha")
 
