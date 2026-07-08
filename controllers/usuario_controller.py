@@ -6,6 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 from datetime import datetime, timedelta, timezone
 import os
+import requests  # 🟢 Importado para a comunicação com a API do Brevo
 
 # 🔌 Importando todas as funções organizadas da nossa nova caixinha de Models!
 from models.usuario_model import (
@@ -88,7 +89,7 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
             
         try:
             model_atualizar_modalidade(conexao, modalidade, cpf_usuario)
-            return jsonify({"mensagem": f"Modalidade alterada para {modalidade} com sucesso!"}), 200
+            return jsonify({"mensagem": f"Modalidade altered para {modalidade} com sucesso!"}), 200
         except Exception as e:
             print(f"❌ Erro ao atualizar modalidade: {e}")
             return jsonify({"erro": str(e)}), 500
@@ -243,10 +244,6 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
 
     @app.route("/solicitar_codigo", methods=["POST"])
     def solicitar_codigo():
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-
         dados = request.get_json()
         email_digitado = dados.get("email", "").strip().lower()
         cpf_digitado = dados.get("cpf", "").strip()
@@ -266,46 +263,50 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
 
             model_salvar_codigo_recuperacao(conexao, usuario["email"], codigo, expiracao)
 
-            # --- CONFIGURAÇÃO DO DISPARO REAL DE E-MAIL (SMTP) ---
-            # 💡 Como boa prática de segurança, buscamos as credenciais de variáveis de ambiente do Render/OS
-            gmail_usuario = os.environ.get("GMAIL_USER", "app.transporteinteriorano@gmail.com") 
-            gmail_senha_app = os.environ.get("GMAIL_APP_PASSWORD", "phie uhnp lxht qvgi")
+            # --- 🔥 NOVO FLUXO DE DISPARO VIA API DO BREVO ---
             try:
-                # Estruturação da mensagem MIME
-                mensagem = MIMEMultipart()
-                mensagem['From'] = gmail_usuario
-                mensagem['To'] = usuario["email"]
-                mensagem['Subject'] = "Chave de Segurança - Transporte Interiorano"
+                # 🔒 Segurança: Busca a chave das variáveis do Render, com fallback local
+                api_key = os.environ.get("BREVO_API_KEY", "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")
+                
+                url = "https://api.api.brevo.com/v3/smtp/email" if "api.api.brevo" in api_key else "https://api.brevo.com/v3/smtp/email"
+                
+                headers = {
+                    "accept": "application/json",
+                    "api-key": api_key,
+                    "content-type": "application/json"
+                }
+                
+                payload = {
+                    "sender": {"name": "Transporte Interiorano", "email": "app.transporteinteriorano@gmail.com"},
+                    "to": [{"email": usuario["email"]}],
+                    "subject": "Chave de Segurança - Transporte Interiorano",
+                    "htmlContent": f"""
+                    <html>
+                    <body>
+                        <h3>Olá, {usuario['email']}!</h3>
+                        <p>Você solicitou a recuperação de senha no aplicativo <strong>Transporte Interiorano</strong>.</p>
+                        <p>Use o código de verificação abaixo para definir sua nova senha no aplicativo:</p>
+                        <p style="font-size: 20px; font-weight: bold; color: #007bff; letter-spacing: 2px;">👉 CÓDIGO: {codigo}</p>
+                        <p>Este código é válido por 10 minutos. Se não foi você quem realizou esta solicitação, por favor ignore este e-mail.</p>
+                        <br>
+                        <p>Atenciosamente,<br><strong>Equipe Transporte Interiorano</strong></p>
+                    </body>
+                    </html>
+                    """
+                }
+                
+                # Executa o envio HTTP POST direto (o Render não bloqueia chamadas web normais!)
+                resposta = requests.post(url, json=payload, headers=headers, timeout=15)
+                
+                if resposta.status_code == 201:
+                    print(f"📧 E-mail de recuperação enviado com sucesso via API Brevo para {usuario['email']}!")
+                else:
+                    print(f"❌ Falha no provedor de e-mail (Brevo) HTTP {resposta.status_code}: {resposta.text}")
 
-                # 🟢 Alterado para puxar o e-mail, pois a chave 'nome' não vem do model de recuperação
-                corpo_email = f"""Olá, {usuario['email']}!
+            except Exception as erro_api:
+                print(f"❌ Falha de rede ao se conectar com a API do Brevo: {erro_api}")
 
-Você solicitou a recuperação de senha no aplicativo Transporte Interiorano.
-Use o código de verificação abaixo para definir sua nova senha no aplicativo:
-
-👉 CÓDIGO DE VERIFICAÇÃO: {codigo}
-
-Este código é válido por 10 minutos. Se não foi você quem realizou esta solicitação, por favor ignore este e-mail.
-
-Atenciosamente,
-Equipe Transporte Interiorano.
-"""
-                mensagem.attach(MIMEText(corpo_email, 'plain', 'utf-8'))
-
-                # Conexão segura com os servidores SMTP do Google (porta TLS 587)
-                servidor = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15)
-                #servidor.starttls()
-                servidor.login(gmail_usuario, gmail_senha_app)
-                servidor.sendmail(gmail_usuario, usuario["email"], mensagem.as_string())
-                servidor.quit()
-
-                print(f"📧 E-mail de recuperação enviado com sucesso para {usuario['email']}!")
-
-            except Exception as erro_email:
-                # Se o e-mail falhar por falta de internet local, o print avisa o log mas não quebra a rota
-                print(f"❌ Falha ao enviar e-mail físico: {erro_email}")
-
-            # Mantemos o print de backup que você usa para conferir rápido
+            # Mantemos o print de backup que você usa para conferir rápido no terminal
             print(f"🔒 CÓDIGO DE RECUPERAÇÃO GERADO PARA {usuario['email']}: {codigo}")
             return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
 
