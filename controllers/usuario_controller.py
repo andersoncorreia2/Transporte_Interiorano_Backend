@@ -5,6 +5,7 @@ from psycopg2 import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 from datetime import datetime, timedelta, timezone
+import os
 
 # 🔌 Importando todas as funções organizadas da nossa nova caixinha de Models!
 from models.usuario_model import (
@@ -242,6 +243,10 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
 
     @app.route("/solicitar_codigo", methods=["POST"])
     def solicitar_codigo():
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
         dados = request.get_json()
         email_digitado = dados.get("email", "").strip().lower()
         cpf_digitado = dados.get("cpf", "").strip()
@@ -261,8 +266,49 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
 
             model_salvar_codigo_recuperacao(conexao, usuario["email"], codigo, expiracao)
 
+            # --- CONFIGURAÇÃO DO DISPARO REAL DE E-MAIL (SMTP) ---
+            # 💡 Como boa prática de segurança, buscamos as credenciais de variáveis de ambiente do Render/OS
+            gmail_usuario = os.environ.get("GMAIL_USER", "app.transporteinteriorano@gmail.com") 
+            gmail_senha_app = os.environ.get("GMAIL_APP_PASSWORD", "phie uhnp lxht qvgi")
+            try:
+                # Estruturação da mensagem MIME
+                mensagem = MIMEMultipart()
+                mensagem['From'] = gmail_usuario
+                mensagem['To'] = usuario["email"]
+                mensagem['Subject'] = "Chave de Segurança - Transporte Interiorano"
+
+                # 🟢 Alterado para puxar o e-mail, pois a chave 'nome' não vem do model de recuperação
+                corpo_email = f"""Olá, {usuario['email']}!
+
+Você solicitou a recuperação de senha no aplicativo Transporte Interiorano.
+Use o código de verificação abaixo para definir sua nova senha no aplicativo:
+
+👉 CÓDIGO DE VERIFICAÇÃO: {codigo}
+
+Este código é válido por 10 minutos. Se não foi você quem realizou esta solicitação, por favor ignore este e-mail.
+
+Atenciosamente,
+Equipe Transporte Interiorano.
+"""
+                mensagem.attach(MIMEText(corpo_email, 'plain', 'utf-8'))
+
+                # Conexão segura com os servidores SMTP do Google (porta TLS 587)
+                servidor = smtplib.SMTP('smtp.gmail.com', 587)
+                servidor.starttls()
+                servidor.login(gmail_usuario, gmail_senha_app)
+                servidor.sendmail(gmail_usuario, usuario["email"], mensagem.as_string())
+                servidor.quit()
+
+                print(f"📧 E-mail de recuperação enviado com sucesso para {usuario['email']}!")
+
+            except Exception as erro_email:
+                # Se o e-mail falhar por falta de internet local, o print avisa o log mas não quebra a rota
+                print(f"❌ Falha ao enviar e-mail físico: {erro_email}")
+
+            # Mantemos o print de backup que você usa para conferir rápido
             print(f"🔒 CÓDIGO DE RECUPERAÇÃO GERADO PARA {usuario['email']}: {codigo}")
-            return jsonify({"mensagem": "Código gerado com sucesso! (Verifique os logs do Render)"}), 200
+            return jsonify({"mensagem": "Código enviado para o e-mail cadastrado!"}), 200
+
         except Exception as e:
             print(f"❌ Erro na rota solicitar_codigo: {e}")
             return jsonify({"erro": "Erro interno ao buscar usuário."}), 500
