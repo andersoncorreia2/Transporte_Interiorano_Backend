@@ -293,8 +293,8 @@ Equipe Transporte Interiorano.
                 mensagem.attach(MIMEText(corpo_email, 'plain', 'utf-8'))
 
                 # Conexão segura com os servidores SMTP do Google (porta TLS 587)
-                servidor = smtplib.SMTP('smtp.gmail.com', 587, timeout=15)
-                servidor.starttls()
+                servidor = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15)
+                #servidor.starttls()
                 servidor.login(gmail_usuario, gmail_senha_app)
                 servidor.sendmail(gmail_usuario, usuario["email"], mensagem.as_string())
                 servidor.quit()
