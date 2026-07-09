@@ -62,9 +62,12 @@ def token_requerido(f):
     return decorated
 
 def conectar_banco():
+    # 🟢 BUSCA A CREDENCIAL DA MEMÓRIA SEGURA DO SERVIDOR (TANTO NA NUVEM QUANTO LOCAL)
     DATABASE_URL = os.environ.get("DATABASE_URL")
+    
     if not DATABASE_URL:
-        DATABASE_URL = "postgresql://transporte_db_novo_user:FS385qeaMpIzyZliHuIuQQaw1YwES5HM@dpg-d8t2n80js32c73d3pov0-a.oregon-postgres.render.com/transporte_db_novo?sslmode=require"
+        DATABASE_URL = "postgresql://usuario_local:senha_local@localhost:5432/transporte_db_novo"
+        
     try:
         conexao = psycopg2.connect(DATABASE_URL)
         return conexao
@@ -389,6 +392,54 @@ def cancelar_ou_reabrir_corrida(corrida_id):
         return jsonify({"mensagem": msg}), 200
     except Exception as e:
         conexao.rollback()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
+# =====================================================================
+# ⚡ ENDPOINTS PARA HISTÓRICO DE CORRIDAS EMERGENCIAIS CONCLUÍDAS
+# =====================================================================
+
+@app.route("/corridas/emergentes/historico_passageiro/<cpf>", methods=["GET"])
+def obter_historico_emergente_passageiro(cpf):
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Busca todas as corridas emergentes finalizadas associadas ao CPF do passageiro
+        cursor.execute("""
+            SELECT id, endereco_origem, endereco_destino, status,
+                   to_char(data_criacao, 'DD/MM/YYYY HH24:MI') as data_criacao
+            FROM corridas_emergentes
+            WHERE passageiro_cpf = %s AND status = 'Finalizada'
+            ORDER BY data_criacao DESC
+        """, (cpf,))
+        return jsonify(cursor.fetchall()), 200
+    except Exception as e:
+        print(f"❌ Erro ao buscar historico emergencial do passageiro: {e}")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
+@app.route("/corridas/emergentes/historico_motorista/<cpf>", methods=["GET"])
+def obter_historico_emergente_motorista(cpf):
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Busca as corridas finalizadas do motorista trazendo o nome do passageiro correspondente
+        cursor.execute("""
+            SELECT c.id, c.endereco_origem, c.endereco_destino, c.status,
+                   to_char(c.data_criacao, 'DD/MM/YYYY HH24:MI') as data_criacao,
+                   u.nome as passageiro_nome
+            FROM corridas_emergentes c
+            LEFT JOIN usuarios u ON c.passageiro_cpf = u.cpf
+            WHERE c.motorista_cpf = %s AND c.status = 'Finalizada'
+            ORDER BY c.data_criacao DESC
+        """, (cpf,))
+        return jsonify(cursor.fetchall()), 200
+    except Exception as e:
+        print(f"❌ Erro ao buscar historico emergencial do motorista: {e}")
         return jsonify({"erro": str(e)}), 500
     finally:
         cursor.close()
