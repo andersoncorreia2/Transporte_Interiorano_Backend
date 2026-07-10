@@ -9,11 +9,11 @@ import json
 from datetime import datetime, timedelta, timezone
 import jwt
 from functools import wraps
-from datetime import datetime
-import pytz
+
 
 # Configura o fuso horário de Brasília
-fuso_brasilia = pytz.timezone('America/Sao_Paulo')
+from zoneinfo import ZoneInfo
+fuso_brasilia = ZoneInfo("America/Sao_Paulo")
 
 # Garante a hora certa de Brasília, independente de onde o servidor está rodando
 data_atual = datetime.now(fuso_brasilia).strftime('%d/%M/%Y %H:%M') 
