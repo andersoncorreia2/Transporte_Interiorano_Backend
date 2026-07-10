@@ -10,15 +10,6 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from functools import wraps
 
-
-# Configura o fuso horário de Brasília
-from zoneinfo import ZoneInfo
-fuso_brasilia = ZoneInfo("America/Sao_Paulo")
-
-# Garante a hora certa de Brasília, independente de onde o servidor está rodando
-data_atual = datetime.now(fuso_brasilia).strftime('%d/%M/%Y %H:%M') 
-# Se o seu banco salvar como timestamp/data pura, use: datetime.now(fuso_brasilia)
-
 app = Flask(__name__)
 
 # 🟢 CERTIFIQUE-SE DE QUE ESTA LINHA EXISTE AQUI ANTES DOS PLUGUES:
@@ -71,12 +62,10 @@ def token_requerido(f):
     return decorated
 
 def conectar_banco():
-    # 🟢 AUTOMÁTICO: Busca a credencial da memória segura do servidor
+    # 🟢 BUSCA A CREDENCIAL DA MEMÓRIA SEGURA DO SERVIDOR (TANTO NA NUVEM QUANTO LOCAL)
     DATABASE_URL = os.environ.get("DATABASE_URL")
     
     if not DATABASE_URL:
-        # Padrão limpo para o GitHub. Para testar local sem ligar o Postgres no PC,
-        # basta rodar o comando do terminal com a URL do Render antes de iniciar o app!
         DATABASE_URL = "postgresql://usuario_local:senha_local@localhost:5432/transporte_db_novo"
         
     try:
@@ -185,18 +174,20 @@ def criar_corrida_emergente():
     origem_lng = dados.get("origem_longitude")
     destino_lat = dados.get("destino_latitude")
     destino_lng = dados.get("destino_longitude")
+    # 🟢 ALTERAÇÃO 1: Captura se o passageiro quer 'Carro' ou 'Moto' enviado pelo aplicativo
     veiculo_tipo = dados.get("veiculo_tipo", "Carro")
     
-    if not all([origem_lat,裝rigem_lng, destino_lat, destino_lng]):
+    if not all([origem_lat, origem_lng, destino_lat, destino_lng]):
         return jsonify({"erro": "Parâmetros incorretos ou incompletos."}), 400
 
     conexao = conectar_banco()
     cursor = conexao.cursor()
     try:
+        # 🟢 ALTERAÇÃO 2: Grava o tipo solicitado na nova coluna 'veiculo_tipo'
         cursor.execute("""
             INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, data_criacao) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, 'Procurando', %s, %s) RETURNING id
-        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(fuso_brasilia)))
+        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc)))
         corrida_id = cursor.fetchone()[0]
         conexao.commit()
         return jsonify({"mensagem": f"Procurando motoristas de {veiculo_tipo}...", "corrida_id": corrida_id}), 201
@@ -210,25 +201,25 @@ def criar_corrida_emergente():
 @app.route("/corridas/emergentes/disponiveis", methods=["GET"])
 @token_requerido
 def listar_corridas_emergentes_proximas():
+    # 🟢 ALTERAÇÃO 3: Captura o CPF do motorista logado que está a pedir a lista do radar
     motorista_cpf = request.usuario_logado["cpf"]
     
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    agora = datetime.now(fuso_brasilia)
-    
+    agora = datetime.now(timezone.utc)
     try:
         cursor.execute("SELECT id, data_criacao FROM corridas_emergentes WHERE status = 'Procurando'")
         for corrida in cursor.fetchall():
             data_criacao = corrida["data_criacao"]
             if data_criacao.tzinfo is None:
-                data_criacao = fuso_brasilia.localize(data_criacao)
-            else:
-                data_criacao = data_criacao.astimezone(fuso_brasilia)
-                
+                data_criacao = data_criacao.replace(tzinfo=timezone.utc)
+            # 🟢 ALTERAÇÃO CIRÚRGICA: Aumentado para 10 minutos (600 segundos) para a conexão não cair de imediato,
+            # permitindo que novos motoristas vejam o chamado se um parceiro recusar!
             if (agora - data_criacao) > timedelta(seconds=600):
                 cursor.execute("UPDATE corridas_emergentes SET status = 'Expirada' WHERE id = %s", (corrida["id"],))
         conexao.commit()
         
+        # 🟢 ALTERAÇÃO 4: Descobre qual é o tipo de veículo real deste motorista (Carro ou Moto)
         cursor.execute("SELECT veiculo FROM usuarios WHERE cpf = %s", (motorista_cpf,))
         usuario_mot = cursor.fetchone()
         
@@ -236,6 +227,7 @@ def listar_corridas_emergentes_proximas():
         if usuario_mot and usuario_mot["veiculo"] and usuario_mot["veiculo"].startswith("Moto"):
             filtro_veiculo = "Moto"
 
+        # 🟢 ALTERAÇÃO 5: O Filtro SQL agora só traz chamados onde o veiculo_tipo pedido pelo passageiro bate com o do motorista!
         cursor.execute("""
             SELECT * FROM corridas_emergentes 
             WHERE status = 'Procurando' AND veiculo_tipo = %s 
@@ -250,9 +242,6 @@ def listar_corridas_emergentes_proximas():
                 "destino_longitude": float(c["destino_longitude"]), "endereco_origem": c["endereco_origem"], "endereco_destino": c["endereco_destino"], "status": c["status"]
             })
         return jsonify(lista_final), 200
-    except Exception as e:
-        print(f"Erro no radar: {e}")
-        return jsonify({"erro": str(e)}), 500
     finally:
         cursor.close()
         conexao.close()
