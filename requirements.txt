@@ -3,3 +3,4 @@ psycopg2-binary
 firebase-admin
 gunicorn
 PyJWT==2.8.0
+pytz
