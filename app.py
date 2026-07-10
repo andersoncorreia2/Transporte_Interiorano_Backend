@@ -66,7 +66,7 @@ def conectar_banco():
     DATABASE_URL = os.environ.get("DATABASE_URL")
     
     if not DATABASE_URL:
-        DATABASE_URL = "postgresql://usuario_local:senha_local@localhost:5432/transporte_db_novo"
+        DATABASE_URL = "postgresql://postgres:123456@localhost:5433/postgres"
         
     try:
         conexao = psycopg2.connect(DATABASE_URL)
@@ -187,7 +187,7 @@ def criar_corrida_emergente():
         cursor.execute("""
             INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, data_criacao) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, 'Procurando', %s, %s) RETURNING id
-        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc)))
+        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc))) #timezone.utc
         corrida_id = cursor.fetchone()[0]
         conexao.commit()
         return jsonify({"mensagem": f"Procurando motoristas de {veiculo_tipo}...", "corrida_id": corrida_id}), 201
@@ -407,9 +407,10 @@ def obter_historico_emergente_passageiro(cpf):
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
         # Busca todas as corridas emergentes finalizadas associadas ao CPF do passageiro
+        # 🔒 CORREÇÃO DE FUSO: Força a formatação a respeitar o fuso local exato
         cursor.execute("""
             SELECT id, endereco_origem, endereco_destino, status,
-                   to_char(data_criacao, 'DD/MM/YYYY HH24:MI') as data_criacao
+                   to_char(data_criacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_criacao
             FROM corridas_emergentes
             WHERE passageiro_cpf = %s AND status = 'Finalizada'
             ORDER BY data_criacao DESC
@@ -428,9 +429,10 @@ def obter_historico_emergente_motorista(cpf):
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
         # Busca as corridas finalizadas do motorista trazendo o nome do passageiro correspondente
+        # 🔒 CORREÇÃO DE FUSO: Força a formatação a respeitar o fuso local exato
         cursor.execute("""
             SELECT c.id, c.endereco_origem, c.endereco_destino, c.status,
-                   to_char(c.data_criacao, 'DD/MM/YYYY HH24:MI') as data_criacao,
+                   to_char(c.data_criacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_criacao,
                    u.nome as passageiro_nome
             FROM corridas_emergentes c
             LEFT JOIN usuarios u ON c.passageiro_cpf = u.cpf
