@@ -187,7 +187,7 @@ def criar_corrida_emergente():
         cursor.execute("""
             INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, data_criacao) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, 'Procurando', %s, %s) RETURNING id
-        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc)))
+        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now()))
         corrida_id = cursor.fetchone()[0]
         conexao.commit()
         return jsonify({"mensagem": f"Procurando motoristas de {veiculo_tipo}...", "corrida_id": corrida_id}), 201
