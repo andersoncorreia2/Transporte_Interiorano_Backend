@@ -1,4 +1,14 @@
+# Chaves e Senhas
 firebase-key.json
+
+# Ambientes Virtuais
+venv/
+env/
+.venv/
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
 banco.db
 ngrok.exe
 *.db

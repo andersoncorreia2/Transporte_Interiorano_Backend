@@ -81,7 +81,8 @@ def enviar_notificacao(token, titulo, corpo):
             priority='high',
             notification=messaging.AndroidNotification(
                 sound='default',
-                default_sound=True
+                default_sound=True,
+                channel_id='canal_caronas_urgente_v2' # 🟢 AGORA O PYTHON EXIGE O CANAL BARULHENTO!
             )
         )
         message = messaging.Message(
@@ -90,10 +91,10 @@ def enviar_notificacao(token, titulo, corpo):
             android=android_alert
         )
         messaging.send(message)
-        print("✅ Notificação enviada com diretrizes de som ativa!")
+        print("✅ Notificação enviada com canal urgente vinculado!")
     except Exception as e:
         print(f"Erro ao enviar notificação: {e}")
-        
+
 def criar_tabelas():
     conexao = conectar_banco()
     if not conexao:
@@ -134,6 +135,7 @@ def criar_tabelas():
         """)
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS passageiro_cpf TEXT;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP;")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS codigos_recuperacao (
@@ -150,6 +152,7 @@ def criar_tabelas():
                 data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP WITH TIME ZONE;")
         conexao.commit()
         print("✅ Tabelas, colunas e modo emergencial verificados com sucesso!")
     except Exception as e:
@@ -187,7 +190,7 @@ def criar_corrida_emergente():
         cursor.execute("""
             INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, data_criacao) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, 'Procurando', %s, %s) RETURNING id
-        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc))) #timezone.utc
+        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc))) # timezone.utc
         corrida_id = cursor.fetchone()[0]
         conexao.commit()
         return jsonify({"mensagem": f"Procurando motoristas de {veiculo_tipo}...", "corrida_id": corrida_id}), 201
@@ -201,25 +204,24 @@ def criar_corrida_emergente():
 @app.route("/corridas/emergentes/disponiveis", methods=["GET"])
 @token_requerido
 def listar_corridas_emergentes_proximas():
-    # 🟢 ALTERAÇÃO 3: Captura o CPF do motorista logado que está a pedir a lista do radar
+    # Captura o CPF do motorista logado que está a pedir a lista do radar
     motorista_cpf = request.usuario_logado["cpf"]
     
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
-    agora = datetime.now(timezone.utc)
     try:
-        cursor.execute("SELECT id, data_criacao FROM corridas_emergentes WHERE status = 'Procurando'")
-        for corrida in cursor.fetchall():
-            data_criacao = corrida["data_criacao"]
-            if data_criacao.tzinfo is None:
-                data_criacao = data_criacao.replace(tzinfo=timezone.utc)
-            # 🟢 ALTERAÇÃO CIRÚRGICA: Aumentado para 10 minutos (600 segundos) para a conexão não cair de imediato,
-            # permitindo que novos motoristas vejam o chamado se um parceiro recusar!
-            if (agora - data_criacao) > timedelta(seconds=600):
-                cursor.execute("UPDATE corridas_emergentes SET status = 'Expirada' WHERE id = %s", (corrida["id"],))
+        # 1. Pega a hora exata do Brasil e volta 10 minutos (600 segundos) no relógio
+        limite_tempo = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        # 2. Atualiza todos os chamados que passaram do limite de uma vez só!
+        cursor.execute("""
+            UPDATE corridas_emergentes 
+            SET status = 'Expirada' 
+            WHERE status = 'Procurando' AND data_criacao < %s
+        """, (limite_tempo,))
         conexao.commit()
         
-        # 🟢 ALTERAÇÃO 4: Descobre qual é o tipo de veículo real deste motorista (Carro ou Moto)
+        # 3. Descobre qual é o tipo de veículo real deste motorista (Carro ou Moto)
         cursor.execute("SELECT veiculo FROM usuarios WHERE cpf = %s", (motorista_cpf,))
         usuario_mot = cursor.fetchone()
         
@@ -227,21 +229,21 @@ def listar_corridas_emergentes_proximas():
         if usuario_mot and usuario_mot["veiculo"] and usuario_mot["veiculo"].startswith("Moto"):
             filtro_veiculo = "Moto"
 
-        # 🟢 ALTERAÇÃO 5: O Filtro SQL agora só traz chamados onde o veiculo_tipo pedido pelo passageiro bate com o do motorista!
+        # 4. O Filtro SQL agora só traz chamados válidos
         cursor.execute("""
             SELECT * FROM corridas_emergentes 
             WHERE status = 'Procurando' AND veiculo_tipo = %s 
             ORDER BY data_criacao DESC
         """, (filtro_veiculo,))
         
-        lista_final = []
+        grid_final = []
         for c in cursor.fetchall():
-            lista_final.append({
+            grid_final.append({
                 "id": c["id"], "passageiro_cpf": c["passageiro_cpf"], "origem_latitude": float(c["origem_latitude"]),
                 "origem_longitude": float(c["origem_longitude"]), "destino_latitude": float(c["destino_latitude"]),
                 "destino_longitude": float(c["destino_longitude"]), "endereco_origem": c["endereco_origem"], "endereco_destino": c["endereco_destino"], "status": c["status"]
             })
-        return jsonify(lista_final), 200
+        return jsonify(grid_final), 200
     finally:
         cursor.close()
         conexao.close()
@@ -272,7 +274,7 @@ def aceitar_corrida_emergente(corrida_id):
 @app.route("/corridas/emergentes/status/<int:corrida_id>", methods=["GET"])
 @token_requerido
 def monitorar_status_corrida(corrida_id):
-    usuario_id = request.usuario_logado["cpf"] # Captura quem está chamando a API pelo JWT
+    usuario_id = request.usuario_logado["cpf"]
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
@@ -286,7 +288,6 @@ def monitorar_status_corrida(corrida_id):
             return jsonify({"erro": "Corrida não encontrada."}), 404
             
         # 🛡️ CONTROLE DE ACESSO (Broken Object Level Authorization - BOLA Mitigação):
-        # Bloqueia a requisição se o CPF do token não for nem o do passageiro e nem o do motorista da corrida
         if usuario_id != corrida["passageiro_cpf"] and usuario_id != corrida["motorista_cpf"]:
             return jsonify({"erro": "Acesso negado. Você não faz parte desta corrida."}), 403
 
@@ -300,7 +301,7 @@ def monitorar_status_corrida(corrida_id):
         cursor.close()
         conexao.close()
 
-# 自由 ROTA ATUALIZADA: Altera o estado da viagem emergencial e contabiliza no perfil dos usuários
+# ROTA ATUALIZADA: Altera o estado da viagem emergencial e contabiliza no perfil dos usuários
 @app.route("/corridas/emergentes/atualizar_status/<int:corrida_id>", methods=["PUT"])
 @token_requerido
 def atualizar_status_viagem_emergente(corrida_id):
@@ -311,35 +312,40 @@ def atualizar_status_viagem_emergente(corrida_id):
     if novo_status not in ["Em Viagem", "Finalizada"]:
         return jsonify({"erro": "Estado de transição inválido."}), 400
 
+    # 1. Primeiro conecta e cria o cursor:
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    
     try:
-        # 🟢 ALTERAÇÃO 1: Adicionado 'passageiro_cpf' no SELECT para rastrearmos quem é o passageiro desta corrida
+        # 2. Executa a busca de segurança da corrida:
         cursor.execute("SELECT motorista_cpf, status, passageiro_cpf FROM corridas_emergentes WHERE id = %s", (corrida_id,))
         corrida = cursor.fetchone()
 
         if not corrida:
             return jsonify({"erro": "Corrida inexistente."}), 404
 
-        # 🛡️ Garante que apenas o motorista legítimo que aceitou a corrida possa iniciar/finalizar
         if corrida["motorista_cpf"] != motorista_cpf:
-            return jsonify({"erro": "Operação não authorized para o seu usuário."}), 403
+            return jsonify({"erro": "Operação não autorizada para o seu usuário."}), 403
 
-        # Executa a atualização do status da corrida emergencial
-        cursor.execute("UPDATE corridas_emergentes SET status = %s WHERE id = %s", (novo_status, corrida_id))
-
-        # 🟢 ALTERAÇÃO 2: Se a corrida foi Finalizada com sucesso, incrementa as métricas unificadas na tabela de usuários
+        # 3. 🟢 O LUGAR CORRETO DO SEU IF/ELSE É AQUI DENTRO:
         if novo_status == "Finalizada":
-            # 🟢 ALTERAÇÃO 1: Descobre o tipo de veículo do motorista para calcular o multiplicador de vagas_ofertadas
+            cursor.execute("""
+                UPDATE corridas_emergentes 
+                SET status = %s, data_finalizacao = %s 
+                WHERE id = %s
+            """, (novo_status, datetime.now(timezone.utc), corrida_id)) # timezone.utc retirado para evitar confusão de fuso horário
+        else:
+            cursor.execute("UPDATE corridas_emergentes SET status = %s WHERE id = %s", (novo_status, corrida_id))
+
+        # 4. Se a corrida foi Finalizada, incrementa as métricas dos usuários:
+        if novo_status == "Finalizada":
             cursor.execute("SELECT veiculo FROM usuarios WHERE cpf = %s", (motorista_cpf,))
             usuario_mot = cursor.fetchone()
             
-            # Se começar com Moto soma 1, senão soma 4 (Carros, Vans, etc.)
             vagas_a_somar = 1
             if usuario_mot and usuario_mot["veiculo"] and not usuario_mot["veiculo"].startswith("Moto"):
                 vagas_a_somar = 4
 
-            # 1. Soma +1 corrida, +1 passageiro e o multiplicador correto de vagas_ofertadas para o MOTORISTA
             cursor.execute("""
                 UPDATE usuarios 
                 SET corridas_realizadas = corridas_realizadas + 1, 
@@ -348,7 +354,6 @@ def atualizar_status_viagem_emergente(corrida_id):
                 WHERE cpf = %s
             """, (vagas_a_somar, motorista_cpf))
 
-            # 2. Soma +1 corrida realizada para o PASSAGEIRO correspondente
             cursor.execute("""
                 UPDATE usuarios 
                 SET corridas_realizadas = corridas_realizadas + 1 
@@ -377,11 +382,9 @@ def cancelar_ou_reabrir_corrida(corrida_id):
         if not corrida:
             return jsonify({"erro": "Corrida não encontrada."}), 404
             
-        # 🛡️ Só permite o cancelamento se quem chamou for o passageiro dono ou o motorista vinculado
         if usuario_cpf != corrida["passageiro_cpf"] and usuario_cpf != corrida["motorista_cpf"]:
             return jsonify({"erro": "Ação não autorizada."}), 403
 
-        # 🟢 ALTERAÇÃO CIRÚRGICA: Se for cancelada dentro da tolerância, muda para o status definitivo correto
         if corrida["status"] == "Aceita":
             cursor.execute("UPDATE corridas_emergentes SET status = 'Cancelada pelo passageiro', motorista_cpf = NULL WHERE id = %s", (corrida_id,))
             msg = "Corrida cancelada pelo passageiro!"
@@ -402,15 +405,14 @@ def cancelar_ou_reabrir_corrida(corrida_id):
 # =====================================================================
 
 @app.route("/corridas/emergentes/historico_passageiro/<cpf>", methods=["GET"])
-def obter_historico_emergente_passageiro(cpf):
+def obtener_historico_emergente_passageiro(cpf):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
-        # Busca todas as corridas emergentes finalizadas associadas ao CPF do passageiro
-        # 🔒 CORREÇÃO DE FUSO: Força a formatação a respeitar o fuso local exato
         cursor.execute("""
             SELECT id, endereco_origem, endereco_destino, status,
-                   to_char(data_criacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_criacao
+                   to_char(data_criacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_criacao,
+                   to_char(data_finalizacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_finalizacao
             FROM corridas_emergentes
             WHERE passageiro_cpf = %s AND status = 'Finalizada'
             ORDER BY data_criacao DESC
@@ -424,15 +426,14 @@ def obter_historico_emergente_passageiro(cpf):
         conexao.close()
 
 @app.route("/corridas/emergentes/historico_motorista/<cpf>", methods=["GET"])
-def obter_historico_emergente_motorista(cpf):
+def obtener_historico_emergente_motorista(cpf):
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
-        # Busca as corridas finalizadas do motorista trazendo o nome do passageiro correspondente
-        # 🔒 CORREÇÃO DE FUSO: Força a formatação a respeitar o fuso local exato
         cursor.execute("""
             SELECT c.id, c.endereco_origem, c.endereco_destino, c.status,
                    to_char(c.data_criacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_criacao,
+                   to_char(c.data_finalizacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_finalizacao,
                    u.nome as passageiro_nome
             FROM corridas_emergentes c
             LEFT JOIN usuarios u ON c.passageiro_cpf = u.cpf
@@ -453,9 +454,6 @@ def obter_historico_emergente_motorista(cpf):
 from controllers.solicitacao_controller import configurar_rotas_solicitacao
 from controllers.carona_controller import configurar_rotas_carona
 from controllers.usuario_controller import configurar_rotas_usuario
-
-# 🟢 CERTIFIQUE-SE DE QUE ESTA LINHA EXISTE AQUI ANTES DOS PLUGUES:
-#JWT_SECRET = os.environ.get("JWT_SECRET", "uma_chave_secreta_super_robusta_e_longa_para_desenvolvimento")
 
 configurar_rotas_solicitacao(app, conectar_banco, enviar_notificacao)
 configurar_rotas_carona(app, conectar_banco)

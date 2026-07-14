@@ -27,7 +27,8 @@ def configurar_rotas_solicitacao(app, conectar_banco, enviar_notificacao):
             for sol in solicitacoes_do_cofre:
                 lista_final.append({
                     "id": sol["id"], "carona_id": sol["carona_id"], "passageiro": sol["passageiro"],
-                    "status": sol["status"], "passageiro_cpf": sol.get("passageiro_cpf", "")
+                    "status": sol["status"], "passageiro_cpf": sol.get("passageiro_cpf", ""),
+                    "data_criacao": sol["data_criacao"].strftime("%Y-%m-%dT%H:%M:%S") if sol.get("data_criacao") else ""
                 })
             return jsonify(lista_final), 200
         except Exception as e:
@@ -47,6 +48,9 @@ def configurar_rotas_solicitacao(app, conectar_banco, enviar_notificacao):
             tokens = model_pedir_carona_fluxo(conexao, carona_id, cpf_passageiro, dados)
             if tokens is None:
                 return jsonify({"erro": "Carona inexistente."}), 400
+
+            # 🔍 MONITOR DE DEBUG: Mostra no terminal qual token foi (ou não) localizado
+            print(f"📡 DEBUG NOTIFICAÇÃO PROGRAMADA -> Motorista Token: {tokens['motorista_token']} | Passageiro Token: {tokens['passageiro_token']}")
 
             if tokens["motorista_token"]:
                 enviar_notificacao(tokens["motorista_token"], "Nova Solicitação!", f"{dados['passageiro']} quer uma vaga.")
