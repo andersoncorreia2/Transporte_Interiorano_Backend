@@ -129,6 +129,7 @@ def model_listar_historico_motorista(conexao, cpf):
         cursor.execute("""
             SELECT DISTINCT ON (c.id) c.id, c.id as carona_id, s.passageiro as passageiro, s.passageiro_cpf as passageiro_cpf, c.status, c.evento_nome, c.cidade_origem, c.cidade_destino,
                    c.horario as horario,
+                   to_char(s.data_criacao, 'DD/MM/YYYY HH24:MI') as data_criacao,
                    to_char(s.data_finalizacao AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') as data_finalizacao
             FROM caronas c
             LEFT JOIN solicitacoes s ON s.carona_id = c.id AND s.status = 'Finalizada'
