@@ -153,6 +153,8 @@ def criar_tabelas():
             )
         """)
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP WITH TIME ZONE;")
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS motorista_latitude NUMERIC;")
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS motorista_longitude NUMERIC;")
         conexao.commit()
         print("✅ Tabelas, colunas e modo emergencial verificados com sucesso!")
     except Exception as e:
@@ -295,7 +297,9 @@ def monitorar_status_corrida(corrida_id):
             "id": corrida["id"], "status": corrida["status"], "motorista_nome": corrida.get("motorista_nome", ""),
             "veiculo": corrida.get("veiculo", ""), "placa": corrida.get("placa", ""),
             "origem_latitude": float(corrida["origem_latitude"]), "origem_longitude": float(corrida["origem_longitude"]),
-            "destino_latitude": float(corrida["destino_latitude"]), "destino_longitude": float(corrida["destino_longitude"])
+            "destino_latitude": float(corrida["destino_latitude"]), "destino_longitude": float(corrida["destino_longitude"]),
+            "motorista_latitude": float(corrida["motorista_latitude"]) if corrida.get("motorista_latitude") else float(corrida["origem_latitude"]),
+            "motorista_longitude": float(corrida["motorista_longitude"]) if corrida.get("motorista_longitude") else float(corrida["origem_longitude"])
         }), 200
     finally:
         cursor.close()
@@ -399,6 +403,78 @@ def cancelar_ou_reabrir_corrida(corrida_id):
     finally:
         cursor.close()
         conexao.close()
+
+@app.route("/corridas/emergentes/recuperar_estado", methods=["GET"])
+@token_requerido
+def recuperar_estado_corrida():
+    cpf_usuario = request.usuario_logado["cpf"]
+    conexao = conectar_banco()
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Busca se o usuário tem alguma corrida onde ele é motorista ou passageiro e que não foi finalizada/cancelada
+        cursor.execute("""
+            SELECT c.*, u.nome as motorista_nome, u.veiculo, u.placa 
+            FROM corridas_emergentes c 
+            LEFT JOIN usuarios u ON c.motorista_cpf = u.cpf 
+            WHERE (c.passageiro_cpf = %s OR c.motorista_cpf = %s) 
+            AND c.status IN ('Aceita', 'Em Viagem')
+            ORDER BY c.data_criacao DESC LIMIT 1
+        """, (cpf_usuario, cpf_usuario))
+        corrida = cursor.fetchone()
+
+        if corrida:
+            return jsonify({
+                "id": corrida["id"],
+                "status": corrida["status"],
+                "motorista_nome": corrida.get("motorista_nome", ""),
+                "veiculo": corrida.get("veiculo", ""),
+                "placa": corrida.get("placa", ""),
+                "veiculo_tipo": corrida.get("veiculo_tipo", "Carro"),
+                "origem_latitude": float(corrida["origem_latitude"]),
+                "origem_longitude": float(corrida["origem_longitude"]),
+                "destino_latitude": float(corrida["destino_latitude"]),
+                "destino_longitude": float(corrida["destino_longitude"]),
+                "endereco_origem": corrida.get("endereco_origem", ""),
+                "endereco_destino": corrida.get("endereco_destino", ""),
+                "is_motorista_desta_corrida": corrida["motorista_cpf"] == cpf_usuario
+            }), 200
+        else:
+            return jsonify({"mensagem": "Nenhuma corrida ativa encontrada."}), 200
+    except Exception as e:
+        print(f"Erro ao recuperar estado: {e}")
+        return jsonify({"erro": "Erro ao recuperar estado"}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+        
+@app.route("/corridas_emergentes/atualizar_localizacao", methods=["POST"])
+@token_requerido
+def atualizar_localizacao_motorista():
+    motorista_cpf = request.usuario_logado["cpf"]
+    dados = request.get_json()
+    id_corrida = dados.get("id")
+    lat = dados.get("motorista_latitude")
+    lng = dados.get("motorista_longitude")
+
+    if not id_corrida or lat is None or lng is None:
+        return jsonify({"erro": "Dados incompletos"}), 400
+
+    conexao = conectar_banco()
+    cursor = conexao.cursor()
+    try:
+        cursor.execute("""
+            UPDATE corridas_emergentes 
+            SET motorista_latitude = %s, motorista_longitude = %s 
+            WHERE id = %s AND motorista_cpf = %s
+        """, (lat, lng, id_corrida, motorista_cpf))
+        conexao.commit()
+        return jsonify({"mensagem": "Localização atualizada"}), 200
+    except Exception as e:
+        conexao.rollback()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conexao.close()        
 
 # =====================================================================
 # ⚡ ENDPOINTS PARA HISTÓRICO DE CORRIDAS EMERGENCIAIS CONCLUÍDAS
