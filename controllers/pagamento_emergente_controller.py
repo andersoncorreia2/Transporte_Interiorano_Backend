@@ -98,14 +98,10 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                 "X-Idempotency-Key": f"pix-debito-{passageiro_cpf}-{corrida_id or 'geral'}"
             }
 
-            # Gerando a data exatamente no formato yyyy-MM-dd'T'HH:mm:ssZ exigido pelo Mercado Pago
-            data_expiracao = (datetime.now(timezone.utc) + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S%z')
-
             payload_mp = {
                 "transaction_amount": round(valor_cobrado, 2),
                 "description": f"Quitacao de Debito - Corrida #{corrida_id or 'Geral'}",
                 "payment_method_id": "pix",
-                "date_of_expiration": data_expiracao,  # <--- 2. ADICIONADO AQUI PARA CORRIGIR O ERRO 4049
                 "payer": {
                     "email": "comprador.teste.transporte@gmail.com",
                     "first_name": "Passageiro",
