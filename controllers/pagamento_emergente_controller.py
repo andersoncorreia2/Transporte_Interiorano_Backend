@@ -3,6 +3,7 @@ import os
 import requests
 from flask import jsonify, request
 import traceback
+from datetime import datetime, timedelta, timezone  # <--- 1. Certifique-se de importar datetime, timedelta e timezone no topo
 
 def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
 
@@ -61,7 +62,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
     @app.route("/pagamentos/emergente/gerar_pix_debito", methods=["POST"])
     @token_requerido
     def gerar_pix_debito():
-        print("🟢 ENTOU NA ROTA DE GERAR PIX!")
+        print("🟢 ENTROU NA ROTA DE GERAR PIX!")
         conexao = None
         cursor = None
         try:
@@ -97,10 +98,14 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                 "X-Idempotency-Key": f"pix-debito-{passageiro_cpf}-{corrida_id or 'geral'}"
             }
 
+            # Definindo a expiração correta para daqui a 30 minutos (evita o erro 4049)
+            data_expiracao = (datetime.now(timezone.utc) + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S.000-03:00')
+
             payload_mp = {
                 "transaction_amount": round(valor_cobrado, 2),
                 "description": f"Quitacao de Debito - Corrida #{corrida_id or 'Geral'}",
                 "payment_method_id": "pix",
+                "date_of_expiration": data_expiracao,  # <--- 2. ADICIONADO AQUI PARA CORRIGIR O ERRO 4049
                 "payer": {
                     "email": "comprador.teste.transporte@gmail.com",
                     "first_name": "Passageiro",
@@ -171,7 +176,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             if conexao:
                 conexao.close()
 
-    # 🟢 3. WEBHOOK DE CONFIRMAÇÃO DO BANCO (CORRIGIDO PARA debitos_passageiros)
+    # 🟢 3. WEBHOOK DE CONFIRMAÇÃO DO BANCO
     @app.route("/pagamentos/emergente/webhook_pix", methods=["POST"])
     def webhook_pix():
         data = request.get_json() or {}
