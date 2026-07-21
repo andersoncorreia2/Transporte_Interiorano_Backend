@@ -99,7 +99,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             }
 
             # Definindo a expiração correta para daqui a 30 minutos (evita o erro 4049)
-            data_expiracao = (datetime.now(timezone.utc) + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S.000-03:00')
+            data_expiracao = (datetime.now(timezone.utc) + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
             payload_mp = {
                 "transaction_amount": round(valor_cobrado, 2),
