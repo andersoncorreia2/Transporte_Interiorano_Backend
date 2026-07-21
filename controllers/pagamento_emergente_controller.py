@@ -103,7 +103,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                 "description": f"Quitacao de Debito - Corrida #{corrida_id or 'Geral'}",
                 "payment_method_id": "pix",
                 "payer": {
-                    "email": "comprador.teste.transporte@gmail.com",
+                    "email": "severinacorreia1942@gmail.com",
                     "first_name": "Passageiro",
                     "last_name": "Teste",
                     "identification": {
