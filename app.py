@@ -9,36 +9,38 @@ import json
 from datetime import datetime, timedelta, timezone
 import jwt
 from functools import wraps
+#from database import conectar_banco
+from controllers.database import conectar_banco
+from dotenv import load_dotenv
+load_dotenv()
 
+# 1. Instancia o aplicativo Flask primeiro
 app = Flask(__name__)
 
-# 🟢 CERTIFIQUE-SE DE QUE ESTA LINHA EXISTE AQUI ANTES DOS PLUGUES:
+# 2. Importações dos módulos e controllers do projeto que dependem do 'app'
+from controllers.database import conectar_banco, inicializar_banco
+from controllers.pagamento_emergente_controller import configurar_rotas_pagamento_emergente
+
+# Configurações de segurança e chaves
 JWT_SECRET = os.environ.get("JWT_SECRET", "uma_chave_secreta_super_robusta_e_longa_para_desenvolvimento")
-
-# --- CONFIGURAÇÃO SEGURA DO FIREBASE ---
-# --- CONFIGURAÇÃO SEGURA DO FIREBASE (COM FALLBACK LOCAL) ---
-firebase_config_str = os.environ.get("FIREBASE_CONFIG_JSON")
-
-if firebase_config_str:
-    try:
+try:
+    # Tenta obter a instância, se já existir, ele não faz nada (evita o erro do terminal)
+    firebase_admin.get_app()
+    print("✅ Firebase já inicializado.")
+except ValueError:
+    # Se não existir, inicializa
+    firebase_config_str = os.environ.get("FIREBASE_CONFIG_JSON")
+    if firebase_config_str:
         firebase_config = json.loads(firebase_config_str)
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        print("✅ Firebase inicializado com sucesso via Nuvem!")
-    except Exception as e:
-        print(f"❌ Erro ao inicializar Firebase: {e}")
-elif os.path.exists("firebase-key.json"):
-    try:
-        # 🟢 Se não achar na nuvem, lê o seu arquivo local do VS Code!
+    elif os.path.exists("firebase-key.json"):
         cred = credentials.Certificate("firebase-key.json")
         firebase_admin.initialize_app(cred)
-        print("✅ Firebase inicializado com sucesso via arquivo local firebase-key.json!")
-    except Exception as e:
-        print(f"❌ Erro ao inicializar Firebase local: {e}")
-else:
-    print("⚠️ AVISO: Nenhuma credencial do Firebase encontrada!")
+    print("✅ Firebase inicializado com sucesso!")
+    pass
 
-def token_requerido(f):    
+def token_requerido(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
@@ -55,25 +57,15 @@ def token_requerido(f):
             request.usuario_logado = dados_token
         except jwt.ExpiredSignatureError:
             return jsonify({"erro": "A sua sessão expirou! Faça login novamente."}), 401
-        except jwt.InvalidTokenError:
+        except jwt.InvalidTokenError as e:
+            print(f"❌ ERRO NO TOKEN JWT: {e}")
             return jsonify({"erro": "Token inválido ou corrompido!"}), 401
+        except Exception as e:
+            print(f"❌ EXCEÇÃO GERAL NO TOKEN: {e}")
+            return jsonify({"erro": "Erro na verificação de acesso.", "detalhe": str(e)}), 401
 
         return f(*args, **kwargs)
     return decorated
-
-def conectar_banco():
-    # 🟢 BUSCA A CREDENCIAL DA MEMÓRIA SEGURA DO SERVIDOR (TANTO NA NUVEM QUANTO LOCAL)
-    DATABASE_URL = os.environ.get("DATABASE_URL")
-    
-    if not DATABASE_URL:
-        DATABASE_URL = "postgresql://postgres:123456@localhost:5433/postgres"
-        
-    try:
-        conexao = psycopg2.connect(DATABASE_URL)
-        return conexao
-    except Exception as e:
-        print(f"Erro ao conectar no banco: {e}")
-        return None
 
 def enviar_notificacao(token, titulo, corpo):
     try:
@@ -103,6 +95,7 @@ def criar_tabelas():
         
     cursor = conexao.cursor()
     try:
+        # 1. Tabela de Usuários
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 cpf TEXT PRIMARY KEY, nome TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
@@ -118,7 +111,9 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS passageiros_conduzidos INTEGER DEFAULT 0;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS vagas_ofertadas INTEGER DEFAULT 0;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS modalidade_ativa TEXT DEFAULT 'Programada';")
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT FALSE;")
 
+        # 2. Tabela de Caronas Programadas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS caronas (
                 id SERIAL PRIMARY KEY, evento_nome TEXT, cidade_origem TEXT, endereco_origem TEXT,
@@ -128,6 +123,7 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Aberta';")
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS motorista_cpf TEXT;")
 
+        # 3. Tabela de Solicitações
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS solicitacoes (
                 id SERIAL PRIMARY KEY, carona_id INTEGER, passageiro TEXT, status TEXT
@@ -137,12 +133,14 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP;")
 
+        # 4. Tabela de Códigos de Recuperação
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS codigos_recuperacao (
                 email TEXT PRIMARY KEY, codigo TEXT NOT NULL, expiracao TIMESTAMP NOT NULL
             )
         """)
 
+        # 5. Tabela de Corridas Emergenciais
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS corridas_emergentes (
                 id SERIAL PRIMARY KEY, passageiro_cpf TEXT NOT NULL, motorista_cpf TEXT,
@@ -152,14 +150,32 @@ def criar_tabelas():
                 data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS veiculo_tipo TEXT DEFAULT 'Carro';")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP WITH TIME ZONE;")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS motorista_latitude NUMERIC;")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS motorista_longitude NUMERIC;")
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS pago BOOLEAN DEFAULT TRUE;")
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS valor_corrida NUMERIC DEFAULT 0.0;")
+
+        # 6. Tabela de Débitos para Quitação via Pix Mercado Pago (UNIFICADA E LIMPA)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS debitos_passageiros (
+                id SERIAL PRIMARY KEY,
+                passageiro_cpf VARCHAR(14) NOT NULL,
+                corrida_id INT,
+                valor_pendente NUMERIC(10,2) DEFAULT 0.00,
+                valor_cobrado NUMERIC(10,2) DEFAULT 0.01,
+                payment_id VARCHAR(100) UNIQUE,
+                status VARCHAR(20) DEFAULT 'pendente',
+                data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         conexao.commit()
-        print("✅ Tabelas, colunas e modo emergencial verificados com sucesso!")
+        print("✅ Tabelas, colunas e modo de pagamento verificados com sucesso!")
     except Exception as e:
-        print(f"❌ Erro ao criar tabelas: {e}")
         conexao.rollback()
+        print(f"❌ Erro ao estruturar tabelas no PostgreSQL: {e}")
     finally:
         cursor.close()
         conexao.close()
@@ -312,16 +328,18 @@ def atualizar_status_viagem_emergente(corrida_id):
     motorista_cpf = request.usuario_logado["cpf"]
     dados = request.get_json()
     novo_status = dados.get("status")
+    
+    # 🟢 CORREÇÃO: O servidor agora escuta as variáveis financeiras enviadas pelo Android
+    pago = dados.get("pago", True)
+    valor_corrida = dados.get("valor_corrida", 0.0)
 
     if novo_status not in ["Em Viagem", "Finalizada"]:
         return jsonify({"erro": "Estado de transição inválido."}), 400
 
-    # 1. Primeiro conecta e cria o cursor:
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 2. Executa a busca de segurança da corrida:
         cursor.execute("SELECT motorista_cpf, status, passageiro_cpf FROM corridas_emergentes WHERE id = %s", (corrida_id,))
         corrida = cursor.fetchone()
 
@@ -331,17 +349,21 @@ def atualizar_status_viagem_emergente(corrida_id):
         if corrida["motorista_cpf"] != motorista_cpf:
             return jsonify({"erro": "Operação não autorizada para o seu usuário."}), 403
 
-        # 3. 🟢 O LUGAR CORRETO DO SEU IF/ELSE É AQUI DENTRO:
+        # 🟢 CORREÇÃO: Grava o calote e o valor da corrida no banco de dados
         if novo_status == "Finalizada":
             cursor.execute("""
                 UPDATE corridas_emergentes 
-                SET status = %s, data_finalizacao = %s 
+                SET status = %s, data_finalizacao = %s, pago = %s, valor_corrida = %s 
                 WHERE id = %s
-            """, (novo_status, datetime.now(timezone.utc), corrida_id)) # timezone.utc retirado para evitar confusão de fuso horário
+            """, (novo_status, datetime.now(timezone.utc), pago, valor_corrida, corrida_id))
+            
+            # 🟢 O "Pulo do Gato": Se o pagamento for falso, bloqueia o usuário imediatamente!
+            if not pago:
+                cursor.execute("UPDATE usuarios SET bloqueado = TRUE WHERE cpf = %s", (corrida["passageiro_cpf"],))
+                print(f"⚠️ Passageiro {corrida['passageiro_cpf']} bloqueado por não pagamento.")
         else:
             cursor.execute("UPDATE corridas_emergentes SET status = %s WHERE id = %s", (novo_status, corrida_id))
 
-        # 4. Se a corrida foi Finalizada, incrementa as métricas dos usuários:
         if novo_status == "Finalizada":
             cursor.execute("SELECT veiculo FROM usuarios WHERE cpf = %s", (motorista_cpf,))
             usuario_mot = cursor.fetchone()
@@ -530,11 +552,21 @@ def obtener_historico_emergente_motorista(cpf):
 from controllers.solicitacao_controller import configurar_rotas_solicitacao
 from controllers.carona_controller import configurar_rotas_carona
 from controllers.usuario_controller import configurar_rotas_usuario
+# 🟢 NOVOS PLUGUES DE PAGAMENTO:
+from controllers.pagamento_emergente_controller import configurar_rotas_pagamento_emergente
+from controllers.pagamento_programado_controller import configurar_rotas_pagamento_programado
 
 configurar_rotas_solicitacao(app, conectar_banco, enviar_notificacao)
 configurar_rotas_carona(app, conectar_banco)
 configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET)
 
+# 🟢 INICIANDO AS ROTAS DE PAGAMENTO:
+configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido)
+configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido)
+
+# 3. Bloco de execução principal no final do arquivo
 if __name__ == "__main__":
-    porta = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host="0.0.0.0", port=porta)
+    # Garante que as tabelas sejam criadas/verificadas ao iniciar o app
+    inicializar_banco()
+    #porta = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=5000, debug=True)
