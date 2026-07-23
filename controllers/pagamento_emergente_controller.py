@@ -23,6 +23,38 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             conexao = conectar_banco()
             cursor = conexao.cursor()
 
+            # 🔍 VERIFICAÇÃO ATIVA NO MERCADO PAGO CASO TENHA UM PAGAMENTO PENDENTE
+            cursor.execute("""
+                SELECT payment_id, corrida_id FROM debitos_passageiros 
+                WHERE passageiro_cpf = %s AND status = 'pendente' AND payment_id IS NOT NULL
+                ORDER BY id DESC LIMIT 1
+            """, (passageiro_cpf,))
+            debito_pendente = cursor.fetchone()
+
+            if debito_pendente:
+                payment_id = debito_pendente[0]
+                corrida_id_cadastrada = debito_pendente[1]
+                
+                access_token = os.getenv("MERCADO_PAGO_ACCESS_TOKEN", "").strip()
+                if access_token:
+                    headers = {"Authorization": f"Bearer {access_token}"}
+                    try:
+                        res = requests.get(f"https://api.mercadopago.com/v1/payments/{payment_id}", headers=headers, timeout=5)
+                        if res.status_code == 200:
+                            pagamento_info = res.json()
+                            if pagamento_info.get("status") == "approved":
+                                # SUCESSO! O pagamento foi aprovado externamente, atualiza o banco local agora
+                                if corrida_id_cadastrada:
+                                    cursor.execute("UPDATE corridas_emergentes SET pago = TRUE WHERE id = %s", (corrida_id_cadastrada,))
+                                
+                                cursor.execute("UPDATE debitos_passageiros SET status = 'aprovado' WHERE payment_id = %s", (str(payment_id),))
+                                cursor.execute("UPDATE usuarios SET bloqueado = FALSE WHERE cpf = %s", (passageiro_cpf,))
+                                conexao.commit()
+                                print(f"🎉 AUTO-CHECK: Passageiro CPF {passageiro_cpf} desbloqueado com sucesso!")
+                    except Exception as ex:
+                        print(f"⚠️ Erro ao consultar status no Mercado Pago: {ex}")
+
+            # Segue a verificação normal de bloqueio e débitos
             cursor.execute("SELECT bloqueado FROM usuarios WHERE cpf = %s", (passageiro_cpf,))
             usuario = cursor.fetchone()
             
@@ -47,7 +79,11 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                     }
                 }), 200
                 
-            return jsonify({"bloqueado": False, "mensagem": "Nenhum débito encontrado."}), 200
+            # ✅ RETORNO COM MENSAGEM DE SUCESSO E LIBERAÇÃO DO APP
+            return jsonify({
+                "bloqueado": False, 
+                "mensagem": "Pagamento confirmado com sucesso! Seu débito foi quitado e o aplicativo está liberado para novas corridas."
+            }), 200
         except Exception as e:
             if conexao:
                 conexao.rollback()
@@ -58,7 +94,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             if conexao:
                 conexao.close()
 
-    # 🟢 2. GERAÇÃO DE PIX REAL (R$ 0,01 PARA TESTE) VIA MERCADO PAGO
+    # 2. GERAÇÃO DE PIX REAL (R$ 0,01 PARA TESTE) VIA MERCADO PAGO
     @app.route("/pagamentos/emergente/gerar_pix_debito", methods=["POST"])
     @token_requerido
     def gerar_pix_debito():
@@ -85,7 +121,14 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             """, (passageiro_cpf,))
             resultado = cursor.fetchone()
 
-            valor_cobrado = float(resultado[0]) if (resultado and resultado[0] is not None) else 0.01
+            # Garante que o valor cobrado seja sempre um número positivo válido (mínimo de R$ 0,01)
+            try:
+                valor_cobrado = float(resultado[0]) if (resultado and resultado[0] is not None) else 0.01
+            except (ValueError, TypeError):
+                valor_cobrado = 0.01
+
+            if valor_cobrado <= 0:
+                valor_cobrado = 0.01
 
             access_token = os.getenv("MERCADO_PAGO_ACCESS_TOKEN", "").strip()
             if not access_token:
@@ -133,18 +176,22 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             if not pix_copia_cola:
                 return jsonify({"erro": "O Mercado Pago não retornou o código Pix Copia e Cola."}), 400
 
-            # Salva o payment_id ou insere caso não exista registro prévio
-            cursor.execute("""
-                INSERT INTO debitos_passageiros (passageiro_cpf, corrida_id, valor_cobrado, payment_id, status)
-                VALUES (%s, %s, %s, %s, 'pendente')
-                ON CONFLICT DO NOTHING;
-            """, (passageiro_cpf, corrida_id, valor_cobrado, payment_id))
-
-            cursor.execute("""
-                UPDATE debitos_passageiros 
-                SET payment_id = %s 
-                WHERE passageiro_cpf = %s AND status = 'pendente'
-            """, (payment_id, passageiro_cpf))
+            # Salva de forma limpa: se já existir o payment_id ou registro pendente, atualiza sem conflito
+            try:
+                cursor.execute("""
+                    INSERT INTO debitos_passageiros (passageiro_cpf, corrida_id, valor_cobrado, payment_id, status)
+                    VALUES (%s, %s, %s, %s, 'pendente')
+                    ON CONFLICT (payment_id) DO UPDATE 
+                    SET status = 'pendente', valor_cobrado = EXCLUDED.valor_cobrado;
+                """, (passageiro_cpf, corrida_id, valor_cobrado, payment_id))
+            except Exception:
+                conexao.rollback()
+                # Fallback caso ocorra qualquer restrição de unicidade: remove o pendente antigo e insere o novo
+                cursor.execute("DELETE FROM debitos_passageiros WHERE passageiro_cpf = %s AND status = 'pendente'", (passageiro_cpf,))
+                cursor.execute("""
+                    INSERT INTO debitos_passageiros (passageiro_cpf, corrida_id, valor_cobrado, payment_id, status)
+                    VALUES (%s, %s, %s, %s, 'pendente')
+                """, (passageiro_cpf, corrida_id, valor_cobrado, payment_id))
             
             conexao.commit()
 
@@ -159,8 +206,8 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
         except Exception as e:
             if conexao:
                 conexao.rollback()
-            print(f"🔴 ERRO DETALHADO DA EXCEÇÃO: {repr(e)}")
-            traceback.print_exc()
+            print(f"🔴 ERRO EXATO NA ROTA: {str(e)}")
+            traceback.print_exc()  # <--- Isso imprime a linha exata do erro no terminal
             return jsonify({
                 "erro": "Erro ao gerar cobrança Pix.",
                 "detalhe_tecnico": str(e)
@@ -172,7 +219,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             if conexao:
                 conexao.close()
 
-    # 🟢 3. WEBHOOK DE CONFIRMAÇÃO DO BANCO
+    # 3. WEBHOOK DE CONFIRMAÇÃO DO BANCO
     @app.route("/pagamentos/emergente/webhook_pix", methods=["POST"])
     def webhook_pix():
         data = request.get_json() or {}
