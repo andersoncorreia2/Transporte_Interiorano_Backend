@@ -5,7 +5,7 @@ from flask import jsonify, request
 import traceback
 from datetime import datetime, timedelta, timezone  # <--- 1. Certifique-se de importar datetime, timedelta e timezone no topo
 
-def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
+def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, enviar_notificacao):
 
     # 1. Trava do Calote (Passageiro)
     @app.route("/pagamentos/emergente/verificar_debito", methods=["GET"])
@@ -51,6 +51,16 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                                 cursor.execute("UPDATE usuarios SET bloqueado = FALSE WHERE cpf = %s", (passageiro_cpf,))
                                 conexao.commit()
                                 print(f"🎉 AUTO-CHECK: Passageiro CPF {passageiro_cpf} desbloqueado com sucesso!")
+
+                                # 🟢 DISPARA A NOTIFICAÇÃO PUSH DE LIBERAÇÃO
+                                cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (passageiro_cpf,))
+                                pass_data = cursor.fetchone()
+                                if pass_data and pass_data[0]:
+                                    enviar_notificacao(
+                                        pass_data[0], 
+                                        "🎉 Conta Desbloqueada!", 
+                                        "Seu pagamento foi confirmado. Você já pode solicitar novas corridas!"
+                                    )
                     except Exception as ex:
                         print(f"⚠️ Erro ao consultar status no Mercado Pago: {ex}")
 
@@ -207,7 +217,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
             if conexao:
                 conexao.rollback()
             print(f"🔴 ERRO EXATO NA ROTA: {str(e)}")
-            traceback.print_exc()  # <--- Isso imprime a linha exata do erro no terminal
+            traceback.print_exc()
             return jsonify({
                 "erro": "Erro ao gerar cobrança Pix.",
                 "detalhe_tecnico": str(e)
@@ -247,13 +257,22 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                         passageiro_cpf, corrida_id = debito[0], debito[1]
 
                         if corrida_id:
-                            cursor.execute("UPDATE corridas_emergentes SET pago = TRUE WHERE id = %s", (corrida_id,))
-                        
+                            cursor.execute("UPDATE corridas_emergentes SET pago = TRUE, status = 'Procurando' WHERE id = %s", (corrida_id,))
                         cursor.execute("UPDATE debitos_passageiros SET status = 'aprovado' WHERE payment_id = %s", (str(payment_id),))
                         cursor.execute("UPDATE usuarios SET bloqueado = FALSE WHERE cpf = %s", (passageiro_cpf,))
 
                         conexao.commit()
                         print(f"🎉 SUCESSO! Passageiro CPF {passageiro_cpf} desbloqueado via Pix!")
+
+                        # 🟢 DISPARA A NOTIFICAÇÃO PUSH VIA WEBHOOK
+                        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (passageiro_cpf,))
+                        pass_data = cursor.fetchone()
+                        if pass_data and pass_data[0]:
+                            enviar_notificacao(
+                              pass_data[0], 
+                              "🎉 Conta Desbloqueada!", 
+                              "Seu pagamento foi confirmado. Você já pode solicitar novas corridas!"
+                          )
                 finally:
                     cursor.close()
                     conexao.close()
@@ -288,6 +307,127 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido):
                 cursor.close()
             if conexao:
                 conexao.close()
+
+    # 🟢 NOVO: GERA O PIX ANTECIPADO (FLUXO 1) ANTES DE MANDAR PRO RADAR
+    @app.route("/pagamentos/emergente/gerar_pix_corrida", methods=["POST"])
+    @token_requerido
+    def gerar_pix_corrida():
+        conexao = None
+        cursor = None
+        try:
+            usuario_logado = getattr(request, "usuario_logado", {}) or {}
+            passageiro_cpf = usuario_logado.get("cpf") or usuario_logado.get("usuario")
+            
+            dados_req = request.get_json(silent=True) or {}
+            corrida_id = dados_req.get("corrida_id")
+
+            if not corrida_id:
+                return jsonify({"erro": "ID da corrida não informado."}), 400
+
+            conexao = conectar_banco()
+            cursor = conexao.cursor()
+
+            valor_cobrado = 0.01
+
+            access_token = os.getenv("MERCADO_PAGO_ACCESS_TOKEN", "").strip()
+            if not access_token:
+                return jsonify({"erro": "Token do Mercado Pago não configurado."}), 500
+
+            url_mp = "https://api.mercadopago.com/v1/payments"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "X-Idempotency-Key": f"pix-corrida-{corrida_id}"
+            }
+
+            payload_mp = {
+                "transaction_amount": round(valor_cobrado, 2),
+                "description": f"Pagamento Antecipado - Corrida #{corrida_id}",
+                "payment_method_id": "pix",
+                "payer": {
+                    "email": "passageiro@teste.com",
+                    "first_name": "Passageiro",
+                    "last_name": "App",
+                    "identification": {"type": "CPF", "number": "00000000191"}
+                }
+            }
+
+            resposta_mp = requests.post(url_mp, json=payload_mp, headers=headers, timeout=15)
+            if resposta_mp.status_code not in (200, 201):
+                return jsonify({"erro": "Falha ao gerar Pix no Mercado Pago.", "detalhe": resposta_mp.text}), 400
+
+            dados_mp = resposta_mp.json()
+            transacao_dados = dados_mp.get("point_of_interaction", {}).get("transaction_data", {})
+            pix_copia_cola = transacao_dados.get("qr_code")
+            qr_code_base64 = transacao_dados.get("qr_code_base64")
+            payment_id = str(dados_mp.get("id"))
+
+            cursor.execute("""
+                INSERT INTO debitos_passageiros (passageiro_cpf, corrida_id, valor_cobrado, payment_id, status)
+                VALUES (%s, %s, %s, %s, 'pendente')
+            """, (passageiro_cpf, corrida_id, valor_cobrado, payment_id))
+            conexao.commit()
+
+            return jsonify({
+                "sucesso": True,
+                "pix_copia_cola": pix_copia_cola,
+                "qr_code_base64": qr_code_base64,
+                "payment_id": payment_id
+            }), 200
+        except Exception as e:
+            if conexao:
+                conexao.rollback()
+            return jsonify({"erro": str(e)}), 500
+        finally:
+            if cursor: cursor.close()
+            if conexao: conexao.close()
+            
+    # 🟢 NOVO: VERIFICA SE O PIX ANTECIPADO DA CORRIDA FOI PAGO E LIBERA O RADAR
+    @app.route("/pagamentos/emergente/verificar_pagamento_corrida/<int:corrida_id>", methods=["GET"])
+    @token_requerido
+    def verificar_pagamento_corrida(corrida_id):
+        conexao = None
+        cursor = None
+        try:
+            conexao = conectar_banco()
+            cursor = conexao.cursor()
+
+            # Busca o payment_id pendente desta corrida
+            cursor.execute("""
+                SELECT payment_id, status FROM debitos_passageiros 
+                WHERE corrida_id = %s ORDER BY id DESC LIMIT 1
+            """, (corrida_id,))
+            debito = cursor.fetchone()
+
+            if not debito:
+                return jsonify({"pago": False, "mensagem": "Nenhum pagamento encontrado para esta corrida."}), 200
+
+            payment_id, status_atual = debito[0], debito[1]
+
+            if status_atual == 'aprovado':
+                return jsonify({"pago": True}), 200
+
+            # Consulta ativa no Mercado Pago
+            access_token = os.getenv("MERCADO_PAGO_ACCESS_TOKEN", "").strip()
+            if access_token and payment_id:
+                headers = {"Authorization": f"Bearer {access_token}"}
+                res = requests.get(f"https://api.mercadopago.com/v1/payments/{payment_id}", headers=headers, timeout=5)
+                if res.status_code == 200:
+                    pagamento_info = res.json()
+                    if pagamento_info.get("status") == "approved":
+                        # APROVADO! Libera a corrida para o radar dos motoristas
+                        cursor.execute("UPDATE corridas_emergentes SET pago = TRUE, status = 'Procurando' WHERE id = %s", (corrida_id,))
+                        cursor.execute("UPDATE debitos_passageiros SET status = 'aprovado' WHERE payment_id = %s", (str(payment_id),))
+                        conexao.commit()
+                        return jsonify({"pago": True}), 200
+
+            return jsonify({"pago": False}), 200
+        except Exception as e:
+            if conexao: conexao.rollback()
+            return jsonify({"erro": str(e)}), 500
+        finally:
+            if cursor: cursor.close()
+            if conexao: conexao.close()
 
     # 5. Verificação de Aluguel/Mensalidade (Motorista)
     @app.route("/pagamentos/emergente/verificar_assinatura", methods=["GET"])

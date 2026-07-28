@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Força o carregamento do .env neste arquivo também
 import urllib.parse
 import random
 from flask import jsonify, request
@@ -5,7 +9,7 @@ from psycopg2 import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 from datetime import datetime, timedelta, timezone
-import os
+#import os
 import requests  # 🟢 Importado para a comunicação com a API do Brevo
 
 # 🔌 Importando todas as funções organizadas da nossa nova caixinha de Models!
@@ -26,7 +30,9 @@ from models.usuario_model import (
     model_buscar_recuperacao,
     model_salvar_codigo_recuperacao,
     model_buscar_codigo_recuperacao,
-    model_redefinir_senha_final
+    model_redefinir_senha_final,
+    model_verificar_status_identidade,      # <--- Adicionado
+    model_validar_identidade_usuario        # <--- Adicionado
 )
 
 def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
@@ -268,40 +274,44 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
                 # 🔒 Segurança: Busca a chave das variáveis do Render, com fallback local
                 api_key = os.environ.get("BREVO_API_KEY")
                 
-                url = "https://api.api.brevo.com/v3/smtp/email" if "api.api.brevo" in api_key else "https://api.brevo.com/v3/smtp/email"
-                
-                headers = {
-                    "accept": "application/json",
-                    "api-key": api_key,
-                    "content-type": "application/json"
-                }
-                
-                payload = {
-                    "sender": {"name": "Transporte Interiorano", "email": "app.transporteinteriorano@gmail.com"},
-                    "to": [{"email": usuario["email"]}],
-                    "subject": "Chave de Segurança - Transporte Interiorano",
-                    "htmlContent": f"""
-                    <html>
-                    <body>
-                        <h3>Olá, {usuario['email']}!</h3>
-                        <p>Você solicitou a recuperação de senha no aplicativo <strong>Transporte Interiorano</strong>.</p>
-                        <p>Use o código de verificação abaixo para definir sua nova senha no aplicativo:</p>
-                        <p style="font-size: 20px; font-weight: bold; color: #007bff; letter-spacing: 2px;">👉 CÓDIGO: {codigo}</p>
-                        <p>Este código é válido por 10 minutos. Se não foi você quem realizou esta solicitação, por favor ignore este e-mail.</p>
-                        <br>
-                        <p>Atenciosamente,<br><strong>Equipe Transporte Interiorano</strong></p>
-                    </body>
-                    </html>
-                    """
-                }
-                
-                # Executa o envio HTTP POST direto (o Render não bloqueia chamadas web normais!)
-                resposta = requests.post(url, json=payload, headers=headers, timeout=15)
-                
-                if resposta.status_code == 201:
-                    print(f"📧 E-mail de recuperação enviado com sucesso via API Brevo para {usuario['email']}!")
+                # 🟢 BLINDAGEM: Verifica se a chave existe antes de tentar ler seu conteúdo
+                if not api_key:
+                    print("⚠️ AVISO: A chave 'BREVO_API_KEY' não foi encontrada nas variáveis de ambiente.")
                 else:
-                    print(f"❌ Falha no provedor de e-mail (Brevo) HTTP {resposta.status_code}: {resposta.text}")
+                    url = "https://api.api.brevo.com/v3/smtp/email" if "api.api.brevo" in api_key else "https://api.brevo.com/v3/smtp/email"
+                    
+                    headers = {
+                        "accept": "application/json",
+                        "api-key": api_key,
+                        "content-type": "application/json"
+                    }
+                    
+                    payload = {
+                        "sender": {"name": "Transporte Interiorano", "email": "app.transporteinteriorano@gmail.com"},
+                        "to": [{"email": usuario["email"]}],
+                        "subject": "Chave de Segurança - Transporte Interiorano",
+                        "htmlContent": f"""
+                        <html>
+                        <body>
+                            <h3>Olá, {usuario['email']}!</h3>
+                            <p>Você solicitou a recuperação de senha no aplicativo <strong>Transporte Interiorano</strong>.</p>
+                            <p>Use o código de verificação abaixo para definir sua nova senha no aplicativo:</p>
+                            <p style="font-size: 20px; font-weight: bold; color: #007bff; letter-spacing: 2px;">👉 CÓDIGO: {codigo}</p>
+                            <p>Este código é válido por 10 minutos. Se não foi você quem realizou esta solicitação, por favor ignore este e-mail.</p>
+                            <br>
+                            <p>Atenciosamente,<br><strong>Equipe Transporte Interiorano</strong></p>
+                        </body>
+                        </html>
+                        """
+                    }
+                    
+                    resposta = requests.post(url, json=payload, headers=headers, timeout=15)
+                    
+                    # 🟢 FLEXIBILIDADE: Aceita tanto 201 quanto 200 como sucesso
+                    if resposta.status_code == 201 or resposta.status_code == 200:
+                        print(f"📧 E-mail de recuperação enviado com sucesso via API Brevo para {usuario['email']}!")
+                    else:
+                        print(f"❌ Falha no provedor de e-mail (Brevo) HTTP {resposta.status_code}: {resposta.text}")
 
             except Exception as erro_api:
                 print(f"❌ Falha de rede ao se conectar com a API do Brevo: {erro_api}")
@@ -343,3 +353,34 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
         except Exception as e:
             print(f"❌ Erro ao redefinir senha: {e}")
             return jsonify({"erro": "Erro interno ao processar redefinição."}), 500
+
+    # 🟢 NOVAS ROTAS PARA VALIDAÇÃO DE IDENTIDADE DO PASSAGEIRO
+    @app.route("/usuarios/verificar_identidade", methods=["GET"])
+    @token_requerido
+    def verificar_identidade():
+        conexao = conectar_banco()
+        if not conexao:
+            return jsonify({"erro": "Banco offline"}), 500
+        try:
+            cpf_usuario = request.usuario_logado["cpf"]
+            validada = model_verificar_status_identidade(conexao, cpf_usuario)
+            return jsonify({"identidade_validada": validada}), 200
+        except Exception as e:
+            return jsonify({"erro": str(e)}), 500
+
+    @app.route("/usuarios/validar_identidade", methods=["POST"])
+    @token_requerido
+    def validar_identidade():
+        dados = request.get_json() or {}
+        cpf_informado = dados.get("cpf", "").strip()
+        conexao = conectar_banco()
+        if not conexao:
+            return jsonify({"erro": "Banco offline"}), 500
+        try:
+            cpf_usuario = request.usuario_logado["cpf"]
+            sucesso = model_validar_identidade_usuario(conexao, cpf_usuario, cpf_informado)
+            if sucesso:
+                return jsonify({"mensagem": "Identidade confirmada com sucesso!", "sucesso": True}), 200
+            return jsonify({"erro": "O CPF informado não confere com os dados da sua conta.", "sucesso": False}), 400
+        except Exception as e:
+            return jsonify({"erro": str(e)}), 500

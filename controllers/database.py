@@ -11,7 +11,8 @@ def conectar_banco():
         return None
         
     try:
-        conexao = psycopg2.connect(DATABASE_URL)
+        # Força explicitamente o SSL exigido pelo Render
+        conexao = psycopg2.connect(DATABASE_URL, sslmode='require')
         return conexao
     except Exception as e:
         print(f"Erro ao conectar no banco: {e}")
@@ -38,7 +39,7 @@ def inicializar_banco():
                 valor_cobrado NUMERIC(10,2) DEFAULT 0.01,
                 payment_id VARCHAR(100),
                 status VARCHAR(20) DEFAULT 'pendente',
-                    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         

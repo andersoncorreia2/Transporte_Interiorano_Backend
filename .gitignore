@@ -8,5 +8,6 @@ ngrok.exe
 # Chaves e Senhas
 # Arquivos de credenciais locais (NUNCA SUBIR PRO GIT)
 .env
+venv/
 firebase-key.json
 secrets.properties

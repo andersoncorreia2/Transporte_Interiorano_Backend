@@ -185,3 +185,27 @@ def model_redefinir_senha_final(conexao, nova_senha_hash, email):
         conexao.commit()
     finally:
         cursor.close()
+
+# 🟢 NOVAS FUNÇÕES PARA VALIDAÇÃO DE IDENTIDADE
+def model_verificar_status_identidade(conexao, cpf):
+    cursor = conexao.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("SELECT identidade_validada FROM usuarios WHERE cpf = %s", (cpf,))
+        resultado = cursor.fetchone()
+        return resultado.get("identidade_validada", False) if resultado else False
+    finally:
+        cursor.close()
+
+def model_validar_identidade_usuario(conexao, cpf, cpf_informado):
+    cursor = conexao.cursor()
+    try:
+        # Valida se o CPF digitado bate com o CPF cadastrado do usuário
+        cursor.execute("SELECT cpf FROM usuarios WHERE cpf = %s AND regexp_replace(cpf, '\\D', '', 'g') = regexp_replace(%s, '\\D', '', 'g')", (cpf, cpf_informado))
+        usuario = cursor.fetchone()
+        if usuario:
+            cursor.execute("UPDATE usuarios SET identidade_validada = TRUE WHERE cpf = %s", (cpf,))
+            conexao.commit()
+            return True
+        return False
+    finally:
+        cursor.close()

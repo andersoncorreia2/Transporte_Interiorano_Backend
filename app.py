@@ -1,4 +1,7 @@
+from dotenv import load_dotenv
+load_dotenv()  # Deve vir antes de tudo
 import os
+# Demais imports...
 import urllib.parse
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -11,8 +14,7 @@ import jwt
 from functools import wraps
 #from database import conectar_banco
 from controllers.database import conectar_banco
-from dotenv import load_dotenv
-load_dotenv()
+
 
 # 1. Instancia o aplicativo Flask primeiro
 app = Flask(__name__)
@@ -112,6 +114,7 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS vagas_ofertadas INTEGER DEFAULT 0;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS modalidade_ativa TEXT DEFAULT 'Programada';")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT FALSE;")
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS identidade_validada BOOLEAN DEFAULT FALSE;")
 
         # 2. Tabela de Caronas Programadas
         cursor.execute("""
@@ -122,6 +125,8 @@ def criar_tabelas():
         """)
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Aberta';")
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS motorista_cpf TEXT;")
+        # 🟢 ADICIONADO: Guarda o valor total da corrida informado pelo motorista
+        cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS valor_corrida NUMERIC(10,2) DEFAULT 0.00;")
 
         # 3. Tabela de Solicitações
         cursor.execute("""
@@ -132,6 +137,10 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS passageiro_cpf TEXT;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP;")
+        # 🟢 ADICIONADOS: Controlam a regra dos R$ 5,00 e o prazo limite de 24h
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS taxa_reserva_paga BOOLEAN DEFAULT FALSE;")
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_limite_pagamento TIMESTAMP WITH TIME ZONE;")
+        cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS payment_id_reserva VARCHAR(100);")
 
         # 4. Tabela de Códigos de Recuperação
         cursor.execute("""
@@ -189,31 +198,46 @@ criar_tabelas()
 @app.route("/corridas/emergentes", methods=["POST"])
 @token_requerido
 def criar_corrida_emergente():
-    dados = request.get_json()
+    dados = request.get_json() or {}
     passageiro_cpf = request.usuario_logado["cpf"]
     origem_lat = dados.get("origem_latitude")
     origem_lng = dados.get("origem_longitude")
     destino_lat = dados.get("destino_latitude")
     destino_lng = dados.get("destino_longitude")
-    # 🟢 ALTERAÇÃO 1: Captura se o passageiro quer 'Carro' ou 'Moto' enviado pelo aplicativo
     veiculo_tipo = dados.get("veiculo_tipo", "Carro")
     
-    if not all([origem_lat, origem_lng, destino_lat, destino_lng]):
+    # 🟢 CAPTURA A FORMA DE PAGAMENTO ENVIADA PELO ANDROID
+    forma_pagamento = dados.get("forma_pagamento", "Dinheiro")
+    
+    # 🟢 CORREÇÃO: Valida se algum parâmetro é None (evita o bug do 0.0 no all())
+    if origem_lat is None or origem_lng is None or destino_lat is None or destino_lng is None:
         return jsonify({"erro": "Parâmetros incorretos ou incompletos."}), 400
+
+    # 🟢 SE FOR DINHEIRO: Já nasce como 'Procurando' e pago = TRUE (Vai direto pro radar do motorista)
+    # SE FOR PIX/CARTÃO: Nasce como 'Aguardando Pagamento' e pago = FALSE (Exige Pix antecipado)
+    is_dinheiro = "dinheiro" in forma_pagamento.lower()
+    status_inicial = 'Procurando' if is_dinheiro else 'Aguardando Pagamento'
+    ja_pago = True if is_dinheiro else False
 
     conexao = conectar_banco()
     cursor = conexao.cursor()
     try:
-        # 🟢 ALTERAÇÃO 2: Grava o tipo solicitado na nova coluna 'veiculo_tipo'
         cursor.execute("""
-            INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, data_criacao) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Procurando', %s, %s) RETURNING id
-        """, (passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), veiculo_tipo, datetime.now(timezone.utc))) # timezone.utc
+            INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, pago, data_criacao) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (
+            passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, 
+            dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), 
+            status_inicial, veiculo_tipo, ja_pago, datetime.now(timezone.utc)
+        ))
+        
         corrida_id = cursor.fetchone()[0]
         conexao.commit()
+        
         return jsonify({"mensagem": f"Procurando motoristas de {veiculo_tipo}...", "corrida_id": corrida_id}), 201
     except Exception as e:
         conexao.rollback()
+        print(f"❌ Erro ao criar corrida emergente: {e}")
         return jsonify({"erro": "Erro interno ao processar solicitação."}), 500
     finally:
         cursor.close()
@@ -247,10 +271,10 @@ def listar_corridas_emergentes_proximas():
         if usuario_mot and usuario_mot["veiculo"] and usuario_mot["veiculo"].startswith("Moto"):
             filtro_veiculo = "Moto"
 
-        # 4. O Filtro SQL agora só traz chamados válidos
+        # 4. O Filtro SQL agora só traz chamados que JÁ FORAM PAGOS (Fluxo 1)
         cursor.execute("""
             SELECT * FROM corridas_emergentes 
-            WHERE status = 'Procurando' AND veiculo_tipo = %s 
+            WHERE status = 'Procurando' AND pago = TRUE AND veiculo_tipo = %s
             ORDER BY data_criacao DESC
         """, (filtro_veiculo,))
         
@@ -561,12 +585,10 @@ configurar_rotas_carona(app, conectar_banco)
 configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET)
 
 # 🟢 INICIANDO AS ROTAS DE PAGAMENTO:
-configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido)
+configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, enviar_notificacao)
 configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido)
 
 # 3. Bloco de execução principal no final do arquivo
 if __name__ == "__main__":
-    # Garante que as tabelas sejam criadas/verificadas ao iniciar o app
     inicializar_banco()
-    #porta = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=5000, debug=True)
