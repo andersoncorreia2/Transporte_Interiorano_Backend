@@ -586,7 +586,7 @@ configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET)
 
 # 🟢 INICIANDO AS ROTAS DE PAGAMENTO:
 configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, enviar_notificacao)
-configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido)
+configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, enviar_notificacao)
 
 # 3. Bloco de execução principal no final do arquivo
 if __name__ == "__main__":
