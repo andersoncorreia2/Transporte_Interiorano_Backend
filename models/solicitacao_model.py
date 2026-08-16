@@ -5,15 +5,34 @@ from datetime import datetime, timezone, timedelta
 def model_listar_e_expirar_solicitacoes(conexao):
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
-        limite_tempo = datetime.now() - timedelta(minutes=15)
+        agora = datetime.now()
+        limite_15_min = agora - timedelta(minutes=15)
+        
+        # 1. Derruba quem é Pendente há mais de 15 min OU quem está na Carência há mais de 15 min
         cursor.execute("""
             UPDATE solicitacoes 
             SET status = 'Expirado' 
-            WHERE status = 'Pendente' AND data_criacao < %s
-        """, (limite_tempo,))
+            WHERE (status = 'Pendente' AND data_criacao < %s)
+               OR (status = 'Carencia' AND data_limite_pagamento < %s)
+        """, (limite_15_min, limite_15_min))
+        
+        # 2. Transforma quem estourou as 24h normais em 'Carencia' (e marca a hora exata que isso aconteceu)
+        cursor.execute("""
+            UPDATE solicitacoes 
+            SET status = 'Carencia', 
+                data_limite_pagamento = %s 
+            WHERE status = 'Taxa Paga - Aguardando Saldo' AND data_limite_pagamento < %s
+            RETURNING id, passageiro_cpf, carona_id
+        """, (agora, agora))
+        
+        solicitacoes_que_entraram_em_carencia = cursor.fetchall()
+        
         conexao.commit()
+        
+        # Retorna tudo junto com quem acabou de entrar na carência para o controller avisar
         cursor.execute("SELECT * FROM solicitacoes")
-        return cursor.fetchall()
+        todas_solicitacoes = cursor.fetchall()
+        return todas_solicitacoes, solicitacoes_que_entraram_em_carencia
     finally:
         cursor.close()
 

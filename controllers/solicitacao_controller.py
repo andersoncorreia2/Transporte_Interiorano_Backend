@@ -1,5 +1,6 @@
 import urllib.parse
 from flask import jsonify, request
+from psycopg2.extras import RealDictCursor
 # 🔌 Puxando todas as funções corretas da caixinha de Models, incluindo a nova!
 from models.solicitacao_model import (
     model_listar_e_expirar_solicitacoes,
@@ -22,13 +23,31 @@ def configurar_rotas_solicitacao(app, conectar_banco, enviar_notificacao):
             return jsonify({"erro": "Falha na conexão com o banco"}), 500
         
         try:
-            solicitacoes_do_cofre = model_listar_e_expirar_solicitacoes(conexao)
+            # Recebe as duas listas que o model devolve agora
+            solicitacoes_do_cofre, entraram_carencia = model_listar_e_expirar_solicitacoes(conexao)
+            
+            # Dispara Push Notification para os passageiros que acabaram de estourar as 24h
+            if entraram_carencia:
+                cursor = conexao.cursor(cursor_factory=RealDictCursor)
+                for sol in entraram_carencia:
+                    cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (sol['passageiro_cpf'],))
+                    user = cursor.fetchone()
+                    if user and user['fcm_token']:
+                        enviar_notificacao(
+                            user['fcm_token'], 
+                            "⚠️ Prazo de 24h Expirado!", 
+                            "Atenção: Seu prazo acabou. Você tem 15 MINUTOS de tolerância para quitar o saldo e não perder a vaga e a taxa paga."
+                        )
+                cursor.close()
+
             lista_final = []
             for sol in solicitacoes_do_cofre:
                 lista_final.append({
                     "id": sol["id"], "carona_id": sol["carona_id"], "passageiro": sol["passageiro"],
                     "status": sol["status"], "passageiro_cpf": sol.get("passageiro_cpf", ""),
-                    "data_criacao": sol["data_criacao"].strftime("%Y-%m-%dT%H:%M:%S") if sol.get("data_criacao") else ""
+                    "data_criacao": sol["data_criacao"].strftime("%Y-%m-%dT%H:%M:%S") if sol.get("data_criacao") else "",
+                    # Envia a nova data limite para o Android fazer o reloginho de 15min
+                    "data_limite_pagamento": sol.get("data_limite_pagamento").strftime("%Y-%m-%dT%H:%M:%S") if sol.get("data_limite_pagamento") else "" 
                 })
             return jsonify(lista_final), 200
         except Exception as e:

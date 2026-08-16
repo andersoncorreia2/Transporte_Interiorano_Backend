@@ -339,7 +339,8 @@ def monitorar_status_corrida(corrida_id):
             "origem_latitude": float(corrida["origem_latitude"]), "origem_longitude": float(corrida["origem_longitude"]),
             "destino_latitude": float(corrida["destino_latitude"]), "destino_longitude": float(corrida["destino_longitude"]),
             "motorista_latitude": float(corrida["motorista_latitude"]) if corrida.get("motorista_latitude") else float(corrida["origem_latitude"]),
-            "motorista_longitude": float(corrida["motorista_longitude"]) if corrida.get("motorista_longitude") else float(corrida["origem_longitude"])
+            "motorista_longitude": float(corrida["motorista_longitude"]) if corrida.get("motorista_longitude") else float(corrida["origem_longitude"]),
+            "pago": corrida.get("pago", True) # Enviando o status do calote para o Android!
         }), 200
     finally:
         cursor.close()
