@@ -6,6 +6,7 @@ import urllib.parse
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, messaging
 import json
@@ -18,6 +19,7 @@ from controllers.database import conectar_banco
 
 # 1. Instancia o aplicativo Flask primeiro
 app = Flask(__name__)
+CORS(app)  # Libera o seu servidor para aceitar login do seu HTML
 
 # 2. Importações dos módulos e controllers do projeto que dependem do 'app'
 from controllers.database import conectar_banco, inicializar_banco
