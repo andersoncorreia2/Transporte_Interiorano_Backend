@@ -117,6 +117,8 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS modalidade_ativa TEXT DEFAULT 'Programada';")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT FALSE;")
         cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS identidade_validada BOOLEAN DEFAULT FALSE;")
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS genero TEXT DEFAULT '';")
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_nascimento TEXT DEFAULT '';")
 
         # 2. Tabela de Caronas Programadas
         cursor.execute("""

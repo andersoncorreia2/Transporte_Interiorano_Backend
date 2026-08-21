@@ -44,14 +44,14 @@ def model_inserir_usuario(conexao, dados, senha_criptografada):
     
     try:
         cursor.execute("""
-            INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro, usuario)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO usuarios (nome, cpf, email, telefone, veiculo, placa, senha, vagas, rua, numero, complemento, bairro, cidade, estado, cep, data_cadastro, usuario, genero, data_nascimento)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             dados["nome"], dados["cpf"], email_salvar, dados["telefone"],
             dados.get("veiculo", ""), dados.get("placa", ""), senha_criptografada, dados.get("vagas", "0"),
             dados.get("rua", ""), dados.get("numero", ""), dados.get("complemento", ""),
             dados.get("bairro", ""), dados.get("cidade", ""), dados.get("estado", ""), dados.get("cep", ""),
-            data_formatada, usuario_salvar
+            data_formatada, usuario_salvar, dados.get("genero", ""), dados.get("data_nascimento", "")
         ))
         conexao.commit()
     finally:
@@ -63,13 +63,13 @@ def model_atualizar_usuario(conexao, dados, cpf_real):
         cursor.execute("""
             UPDATE usuarios 
             SET nome=%s, telefone=%s, email=%s, veiculo=%s, placa=%s, vagas=%s,
-                rua=%s, numero=%s, complemento=%s, bairro=%s, cidade=%s, estado=%s, cep=%s
+                rua=%s, numero=%s, complemento=%s, bairro=%s, cidade=%s, estado=%s, cep=%s, genero=%s, data_nascimento=%s
             WHERE cpf=%s
         """, (
             dados["nome"], dados["telefone"], dados["email"].strip().lower(), dados.get("veiculo", ""), 
             dados.get("placa", ""), dados.get("vagas", "0"), dados.get("rua", ""), dados.get("numero", ""), 
             dados.get("complemento", ""), dados.get("bairro", ""), dados.get("cidade", ""), 
-            dados.get("estado", ""), dados.get("cep", ""), cpf_real
+            dados.get("estado", ""), dados.get("cep", ""), dados.get("genero", ""), dados.get("data_nascimento", ""), cpf_real
         ))
         conexao.commit()
     finally:
@@ -129,7 +129,7 @@ def model_buscar_dados_login(conexao, username):
     try:
         cursor.execute("""
             SELECT nome, cpf, email, usuario, telefone, veiculo, placa, vagas, 
-                   rua, numero, complemento, bairro, cidade, estado, cep, senha, data_cadastro 
+                   rua, numero, complemento, bairro, cidade, estado, cep, senha, data_cadastro, genero, data_nascimento 
             FROM usuarios 
             WHERE LOWER(usuario) = %s
         """, (username,))
@@ -186,7 +186,6 @@ def model_redefinir_senha_final(conexao, nova_senha_hash, email):
     finally:
         cursor.close()
 
-# 🟢 NOVAS FUNÇÕES PARA VALIDAÇÃO DE IDENTIDADE
 def model_verificar_status_identidade(conexao, cpf):
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
