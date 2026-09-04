@@ -239,7 +239,9 @@ def configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET):
                         "rua": usuario.get("rua", ""), "numero": usuario.get("numero", ""),
                         "complemento": usuario.get("complemento", ""), "bairro": usuario.get("bairro", ""),
                         "cidade": usuario.get("cidade", ""), "estado": usuario.get("estado", ""), "cep": usuario.get("cep", ""),
-                        "data_cadastro": usuario.get("data_cadastro", "15/06/2026")
+                        "data_cadastro": usuario.get("data_cadastro", "15/06/2026"),
+                        "genero": usuario.get("genero", ""),
+                        "data_nascimento": usuario.get("data_nascimento", "")
                     }
                 }), 200
             else:
