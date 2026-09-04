@@ -1,6 +1,7 @@
 # controllers/pagamento_emergente_controller.py
 import os
 import requests
+import uuid
 from flask import jsonify, request
 import traceback
 from datetime import datetime, timedelta, timezone  # <--- 1. Certifique-se de importar datetime, timedelta e timezone no topo
@@ -148,20 +149,22 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, e
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
-                "X-Idempotency-Key": f"pix-debito-{passageiro_cpf}-{corrida_id or 'geral'}"
+                "X-Idempotency-Key": str(uuid.uuid4()) # 🟢 Trava de segurança (nunca mais repete)
             }
+
+            # 🟢 FILTRO DE LIMPEZA PARA O MERCADO PAGO
+            cpf_limpo = passageiro_cpf.replace(".", "").replace("-", "").strip()
 
             payload_mp = {
                 "transaction_amount": round(valor_cobrado, 2),
                 "description": f"Quitacao de Debito - Corrida #{corrida_id or 'Geral'}",
                 "payment_method_id": "pix",
                 "payer": {
-                    "email": "severinacorreia1942@gmail.com",
+                    "email": "passageiro@transporte.com",
                     "first_name": "Passageiro",
-                    "last_name": "Teste",
                     "identification": {
                         "type": "CPF",
-                        "number": "00000000191"
+                        "number": cpf_limpo
                     }
                 }
             }
@@ -337,18 +340,20 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, e
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
-                "X-Idempotency-Key": f"pix-corrida-{corrida_id}"
+                "X-Idempotency-Key": str(uuid.uuid4()) # 🟢 ID Global único
             }
+
+            # 🟢 FILTRO DE LIMPEZA PARA O MERCADO PAGO
+            cpf_limpo = passageiro_cpf.replace(".", "").replace("-", "").strip()
 
             payload_mp = {
                 "transaction_amount": round(valor_cobrado, 2),
                 "description": f"Pagamento Antecipado - Corrida #{corrida_id}",
                 "payment_method_id": "pix",
                 "payer": {
-                    "email": "passageiro@teste.com",
+                    "email": "passageiro@transporte.com",
                     "first_name": "Passageiro",
-                    "last_name": "App",
-                    "identification": {"type": "CPF", "number": "00000000191"}
+                    "identification": {"type": "CPF", "number": cpf_limpo}
                 }
             }
 

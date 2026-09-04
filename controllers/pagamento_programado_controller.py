@@ -52,27 +52,35 @@ def configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, 
             expiracao_pix = agora_br + timedelta(minutes=30)
             data_expiracao_iso = expiracao_pix.strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
 
+            # 🟢 FILTRO ANTIFRAUDE PARA TESTES
+            cpf_mp = "00000000191" 
+            email_seguro = email_passageiro if "@" in email_passageiro else "passageiro@transporte.com"
+
             mp_payload = {
                 "transaction_amount": TAXA_RESERVA_BRL,
                 "description": "Taxa de Reserva - Viagem Programada",
                 "payment_method_id": "pix",
                 "date_of_expiration": data_expiracao_iso, 
                 "payer": {
-                    "email": email_passageiro,
-                    "first_name": nome_passageiro
+                    "email": email_seguro,
+                    "first_name": nome_passageiro,
+                    "identification": {
+                        "type": "CPF",
+                        "number": cpf_mp
+                    }
                 }
             }
 
             headers = {
                 "Authorization": f"Bearer {mp_access_token}",
                 "Content-Type": "application/json",
-                "X-Idempotency-Key": str(uuid.uuid4()) # 🟢 TRAVA DE SEGURANÇA ADICIONADA
+                "X-Idempotency-Key": str(uuid.uuid4())
             }
 
-            # 🟢 CORREÇÃO 3: Usando biblioteca requests mais estável
             resposta = requests.post("https://api.mercadopago.com/v1/payments", json=mp_payload, headers=headers, timeout=10)
             
-            if resposta.status_code != 201:
+            if resposta.status_code not in (200, 201):
+                print(f"❌ ERRO MERCADO PAGO: {resposta.text}")
                 return jsonify({"erro": "Falha ao gerar Pix.", "detalhe": resposta.text}), 400
 
             resposta_mp = resposta.json()
@@ -240,15 +248,22 @@ def configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, 
             expiracao_pix = agora_br + timedelta(minutes=30)
             data_expiracao_iso = expiracao_pix.strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
 
-            # 🟢 Pagamento direto em vez de Preferences (Para gerar Pix nativo no App)
+            # 🟢 FILTRO ANTIFRAUDE PARA TESTES
+            cpf_mp = "00000000191" 
+            email_seguro = email_passageiro if "@" in email_passageiro else "passageiro@transporte.com"
+
             mp_payload = {
-                "transaction_amount": float(valor_total),
+                "transaction_amount": round(float(valor_total), 2),
                 "description": f"Viagem Programada Integral #{carona_id}",
                 "payment_method_id": "pix",
                 "date_of_expiration": data_expiracao_iso,
                 "payer": {
-                    "email": email_passageiro,
-                    "first_name": nome_passageiro
+                    "email": email_seguro,
+                    "first_name": nome_passageiro,
+                    "identification": {
+                        "type": "CPF",
+                        "number": cpf_mp
+                    }
                 }
             }
 
@@ -260,7 +275,8 @@ def configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, 
 
             resposta = requests.post("https://api.mercadopago.com/v1/payments", json=mp_payload, headers=headers, timeout=10)
             
-            if resposta.status_code != 201:
+            if resposta.status_code not in (200, 201):
+                print(f"❌ ERRO MERCADO PAGO: {resposta.text}")
                 return jsonify({"erro": "Falha ao gerar Pix integral.", "detalhe": resposta.text}), 400
 
             resposta_mp = resposta.json()
@@ -414,13 +430,25 @@ def configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, 
             expiracao_pix = agora_br + timedelta(minutes=30)
             data_expiracao_iso = expiracao_pix.strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
 
+            # 🟢 FILTRO ANTIFRAUDE PARA TESTES
+            cpf_mp = "00000000191" 
+            email_seguro = email_passageiro if "@" in email_passageiro else "passageiro@transporte.com"
+
             mp_payload = {
-                "transaction_amount": float(valor_saldo),
+                "transaction_amount": round(float(valor_saldo), 2),
                 "description": f"Pagamento de Saldo Restante - Viagem #{carona_id}",
                 "payment_method_id": "pix",
                 "date_of_expiration": data_expiracao_iso,
-                "payer": {"email": email_passageiro, "first_name": nome_passageiro}
+                "payer": {
+                    "email": email_seguro, 
+                    "first_name": nome_passageiro,
+                    "identification": {
+                        "type": "CPF",
+                        "number": cpf_mp
+                    }
+                }
             }
+            
             headers = {
                 "Authorization": f"Bearer {mp_access_token}",
                 "Content-Type": "application/json",
@@ -428,7 +456,9 @@ def configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, 
             }
 
             resposta = requests.post("https://api.mercadopago.com/v1/payments", json=mp_payload, headers=headers, timeout=10)
-            if resposta.status_code != 201:
+            
+            if resposta.status_code not in (200, 201):
+                print(f"❌ ERRO MERCADO PAGO: {resposta.text}")
                 return jsonify({"erro": "Falha ao gerar Pix.", "detalhe": resposta.text}), 400
 
             resposta_mp = resposta.json()
