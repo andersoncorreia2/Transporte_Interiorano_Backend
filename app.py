@@ -256,7 +256,7 @@ def listar_corridas_emergentes_proximas():
         cursor.execute("""
             UPDATE corridas_emergentes 
             SET status = 'Expirada' 
-            WHERE status = 'Procurando' AND data_criacao < %s
+            WHERE status IN ('Procurando', 'Aguardando Pagamento') AND data_criacao < %s
         """, (limite_tempo,))
         conexao.commit()
         
