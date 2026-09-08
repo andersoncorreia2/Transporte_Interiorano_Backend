@@ -164,6 +164,7 @@ def criar_tabelas():
             )
         """)
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS veiculo_tipo TEXT DEFAULT 'Carro';")
+        cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS forma_pagamento TEXT DEFAULT 'Dinheiro';")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP WITH TIME ZONE;")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS motorista_latitude NUMERIC;")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS motorista_longitude NUMERIC;")
@@ -223,12 +224,12 @@ def criar_corrida_emergente():
     cursor = conexao.cursor()
     try:
         cursor.execute("""
-            INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, pago, data_criacao) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            INSERT INTO corridas_emergentes (passageiro_cpf, origem_latitude, origem_longitude, destino_latitude, destino_longitude, endereco_origem, endereco_destino, status, veiculo_tipo, forma_pagamento, pago, data_criacao) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         """, (
             passageiro_cpf, origem_lat, origem_lng, destino_lat, destino_lng, 
             dados.get("endereco_origem", ""), dados.get("endereco_destino", ""), 
-            status_inicial, veiculo_tipo, ja_pago, datetime.now(timezone.utc)
+            status_inicial, veiculo_tipo, forma_pagamento, ja_pago, datetime.now(timezone.utc)
         ))
         
         corrida_id = cursor.fetchone()[0]
@@ -278,7 +279,9 @@ def listar_corridas_emergentes_proximas():
             grid_final.append({
                 "id": c["id"], "passageiro_cpf": c["passageiro_cpf"], "origem_latitude": float(c["origem_latitude"]),
                 "origem_longitude": float(c["origem_longitude"]), "destino_latitude": float(c["destino_latitude"]),
-                "destino_longitude": float(c["destino_longitude"]), "endereco_origem": c["endereco_origem"], "endereco_destino": c["endereco_destino"], "status": c["status"]
+                "destino_longitude": float(c["destino_longitude"]), "endereco_origem": c["endereco_origem"], "endereco_destino": c["endereco_destino"], "status": c["status"],
+                # 🟢 INJETANDO NO RADAR DO MOTORISTA
+                "forma_pagamento": c.get("forma_pagamento", "Dinheiro")
             })
         return jsonify(grid_final), 200
     finally:
@@ -334,7 +337,9 @@ def monitorar_status_corrida(corrida_id):
             "destino_latitude": float(corrida["destino_latitude"]), "destino_longitude": float(corrida["destino_longitude"]),
             "motorista_latitude": float(corrida["motorista_latitude"]) if corrida.get("motorista_latitude") else float(corrida["origem_latitude"]),
             "motorista_longitude": float(corrida["motorista_longitude"]) if corrida.get("motorista_longitude") else float(corrida["origem_longitude"]),
-            "pago": corrida.get("pago", True)
+            "pago": corrida.get("pago", True),
+            # 🟢 INJETANDO NO TÚNEL DE STATUS
+            "forma_pagamento": corrida.get("forma_pagamento", "Dinheiro")
         }), 200
     finally:
         cursor.close()
@@ -472,7 +477,9 @@ def recuperar_estado_corrida():
                 "destino_longitude": float(corrida["destino_longitude"]),
                 "endereco_origem": corrida.get("endereco_origem", ""),
                 "endereco_destino": corrida.get("endereco_destino", ""),
-                "is_motorista_desta_corrida": corrida["motorista_cpf"] == cpf_usuario
+                "is_motorista_desta_corrida": corrida["motorista_cpf"] == cpf_usuario,
+                # 🟢 INJETANDO PARA QUANDO REABRIR O APP
+                "forma_pagamento": corrida.get("forma_pagamento", "Dinheiro")
             }), 200
         else:
             return jsonify({"mensagem": "Nenhuma corrida ativa encontrada."}), 200
