@@ -7,19 +7,21 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room  # 🟢 IMPORTAÇÃO DO SOCKET.IO
 import firebase_admin
 from firebase_admin import credentials, messaging
 import json
 from datetime import datetime, timedelta, timezone
 import jwt
 from functools import wraps
-#from database import conectar_banco
 from controllers.database import conectar_banco
-
 
 # 1. Instancia o aplicativo Flask primeiro
 app = Flask(__name__)
 CORS(app)  # Libera o seu servidor para aceitar login do seu HTML
+
+# 🟢 INICIALIZA O MOTOR DE TEMPO REAL (WEBSOCKETS)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 2. Importações dos módulos e controllers do projeto que dependem do 'app'
 from controllers.database import conectar_banco, inicializar_banco
@@ -129,7 +131,6 @@ def criar_tabelas():
         """)
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Aberta';")
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS motorista_cpf TEXT;")
-        # 🟢 ADICIONADO: Guarda o valor total da corrida informado pelo motorista
         cursor.execute("ALTER TABLE caronas ADD COLUMN IF NOT EXISTS valor_corrida NUMERIC(10,2) DEFAULT 0.00;")
 
         # 3. Tabela de Solicitações
@@ -141,7 +142,6 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS passageiro_cpf TEXT;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_finalizacao TIMESTAMP;")
-        # 🟢 ADICIONADOS: Controlam a regra dos R$ 5,00 e o prazo limite de 24h
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS taxa_reserva_paga BOOLEAN DEFAULT FALSE;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS data_limite_pagamento TIMESTAMP WITH TIME ZONE;")
         cursor.execute("ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS payment_id_reserva VARCHAR(100);")
@@ -170,7 +170,7 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS pago BOOLEAN DEFAULT TRUE;")
         cursor.execute("ALTER TABLE corridas_emergentes ADD COLUMN IF NOT EXISTS valor_corrida NUMERIC DEFAULT 0.0;")
 
-        # 6. Tabela de Débitos para Quitação via Pix Mercado Pago (UNIFICADA E LIMPA)
+        # 6. Tabela de Débitos para Quitação via Pix Mercado Pago
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS debitos_passageiros (
                 id SERIAL PRIMARY KEY,
@@ -210,15 +210,11 @@ def criar_corrida_emergente():
     destino_lng = dados.get("destino_longitude")
     veiculo_tipo = dados.get("veiculo_tipo", "Carro")
     
-    # 🟢 CAPTURA A FORMA DE PAGAMENTO ENVIADA PELO ANDROID
     forma_pagamento = dados.get("forma_pagamento", "Dinheiro")
     
-    # 🟢 CORREÇÃO: Valida se algum parâmetro é None (evita o bug do 0.0 no all())
     if origem_lat is None or origem_lng is None or destino_lat is None or destino_lng is None:
         return jsonify({"erro": "Parâmetros incorretos ou incompletos."}), 400
 
-    # 🟢 SE FOR DINHEIRO: Já nasce como 'Procurando' e pago = TRUE (Vai direto pro radar do motorista)
-    # SE FOR PIX/CARTÃO: Nasce como 'Aguardando Pagamento' e pago = FALSE (Exige Pix antecipado)
     is_dinheiro = "dinheiro" in forma_pagamento.lower()
     status_inicial = 'Procurando' if is_dinheiro else 'Aguardando Pagamento'
     ja_pago = True if is_dinheiro else False
@@ -250,16 +246,13 @@ def criar_corrida_emergente():
 @app.route("/corridas/emergentes/disponiveis", methods=["GET"])
 @token_requerido
 def listar_corridas_emergentes_proximas():
-    # Captura o CPF do motorista logado que está a pedir a lista do radar
     motorista_cpf = request.usuario_logado["cpf"]
     
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
-        # 1. Pega a hora exata do Brasil e volta 10 minutos (600 segundos) no relógio
         limite_tempo = datetime.now(timezone.utc) - timedelta(minutes=10)
 
-        # 2. Atualiza todos os chamados que passaram do limite de uma vez só!
         cursor.execute("""
             UPDATE corridas_emergentes 
             SET status = 'Expirada' 
@@ -267,7 +260,6 @@ def listar_corridas_emergentes_proximas():
         """, (limite_tempo,))
         conexao.commit()
         
-        # 3. Descobre qual é o tipo de veículo real deste motorista (Carro ou Moto)
         cursor.execute("SELECT veiculo FROM usuarios WHERE cpf = %s", (motorista_cpf,))
         usuario_mot = cursor.fetchone()
         
@@ -275,7 +267,6 @@ def listar_corridas_emergentes_proximas():
         if usuario_mot and usuario_mot["veiculo"] and usuario_mot["veiculo"].startswith("Moto"):
             filtro_veiculo = "Moto"
 
-        # 4. O Filtro SQL agora só traz chamados que JÁ FORAM PAGOS (Fluxo 1)
         cursor.execute("""
             SELECT * FROM corridas_emergentes 
             WHERE status = 'Procurando' AND pago = TRUE AND veiculo_tipo = %s
@@ -333,7 +324,6 @@ def monitorar_status_corrida(corrida_id):
         if not corrida:
             return jsonify({"erro": "Corrida não encontrada."}), 404
             
-        # 🛡️ CONTROLE DE ACESSO (Broken Object Level Authorization - BOLA Mitigação):
         if usuario_id != corrida["passageiro_cpf"] and usuario_id != corrida["motorista_cpf"]:
             return jsonify({"erro": "Acesso negado. Você não faz parte desta corrida."}), 403
 
@@ -344,13 +334,12 @@ def monitorar_status_corrida(corrida_id):
             "destino_latitude": float(corrida["destino_latitude"]), "destino_longitude": float(corrida["destino_longitude"]),
             "motorista_latitude": float(corrida["motorista_latitude"]) if corrida.get("motorista_latitude") else float(corrida["origem_latitude"]),
             "motorista_longitude": float(corrida["motorista_longitude"]) if corrida.get("motorista_longitude") else float(corrida["origem_longitude"]),
-            "pago": corrida.get("pago", True) # Enviando o status do calote para o Android!
+            "pago": corrida.get("pago", True)
         }), 200
     finally:
         cursor.close()
         conexao.close()
 
-# ROTA ATUALIZADA: Altera o estado da viagem emergencial e contabiliza no perfil dos usuários
 @app.route("/corridas/emergentes/atualizar_status/<int:corrida_id>", methods=["PUT"])
 @token_requerido
 def atualizar_status_viagem_emergente(corrida_id):
@@ -358,7 +347,6 @@ def atualizar_status_viagem_emergente(corrida_id):
     dados = request.get_json()
     novo_status = dados.get("status")
     
-    # 🟢 CORREÇÃO: O servidor agora escuta as variáveis financeiras enviadas pelo Android
     pago = dados.get("pago", True)
     valor_corrida = dados.get("valor_corrida", 0.0)
 
@@ -378,7 +366,6 @@ def atualizar_status_viagem_emergente(corrida_id):
         if corrida["motorista_cpf"] != motorista_cpf:
             return jsonify({"erro": "Operação não autorizada para o seu usuário."}), 403
 
-        # 🟢 CORREÇÃO: Grava o calote e o valor da corrida no banco de dados
         if novo_status == "Finalizada":
             cursor.execute("""
                 UPDATE corridas_emergentes 
@@ -386,7 +373,6 @@ def atualizar_status_viagem_emergente(corrida_id):
                 WHERE id = %s
             """, (novo_status, datetime.now(timezone.utc), pago, valor_corrida, corrida_id))
             
-            # 🟢 O "Pulo do Gato": Se o pagamento for falso, bloqueia o usuário imediatamente!
             if not pago:
                 cursor.execute("UPDATE usuarios SET bloqueado = TRUE WHERE cpf = %s", (corrida["passageiro_cpf"],))
                 print(f"⚠️ Passageiro {corrida['passageiro_cpf']} bloqueado por não pagamento.")
@@ -462,7 +448,6 @@ def recuperar_estado_corrida():
     conexao = conectar_banco()
     cursor = conexao.cursor(cursor_factory=RealDictCursor)
     try:
-        # Busca se o usuário tem alguma corrida onde ele é motorista ou passageiro e que não foi finalizada/cancelada
         cursor.execute("""
             SELECT c.*, u.nome as motorista_nome, u.veiculo, u.placa 
             FROM corridas_emergentes c 
@@ -581,7 +566,6 @@ def obtener_historico_emergente_motorista(cpf):
 from controllers.solicitacao_controller import configurar_rotas_solicitacao
 from controllers.carona_controller import configurar_rotas_carona
 from controllers.usuario_controller import configurar_rotas_usuario
-# 🟢 NOVOS PLUGUES DE PAGAMENTO:
 from controllers.pagamento_emergente_controller import configurar_rotas_pagamento_emergente
 from controllers.pagamento_programado_controller import configurar_rotas_pagamento_programado
 
@@ -589,11 +573,39 @@ configurar_rotas_solicitacao(app, conectar_banco, enviar_notificacao)
 configurar_rotas_carona(app, conectar_banco)
 configurar_rotas_usuario(app, conectar_banco, token_requerido, JWT_SECRET)
 
-# 🟢 INICIANDO AS ROTAS DE PAGAMENTO:
 configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, enviar_notificacao)
 configurar_rotas_pagamento_programado(app, conectar_banco, token_requerido, enviar_notificacao)
+
+
+# =====================================================================
+# 🟢 TÚNEL DE GPS EM TEMPO REAL (WEBSOCKETS) 
+# =====================================================================
+
+@socketio.on('connect')
+def handle_connect():
+    print(f"🟢 Novo dispositivo conectado na malha de tempo real!")
+
+@socketio.on('entrar_corrida')
+def on_join(data):
+    # O motorista e o passageiro entram na mesma 'sala' virtual isolada usando o ID da corrida
+    corrida_id = data.get('corrida_id')
+    if corrida_id:
+        join_room(str(corrida_id))
+        print(f"📡 Dispositivo ingressou na sala da corrida: {corrida_id}")
+
+@socketio.on('enviar_gps_motorista')
+def handle_gps(data):
+    # Captura a telemetria do motorista e retransmite IMEDIATAMENTE para a sala
+    corrida_id = data.get('corrida_id')
+    lat = data.get('lat')
+    lng = data.get('lng')
+
+    if corrida_id and lat and lng:
+        emit('atualizar_mapa_passageiro', {'lat': lat, 'lng': lng}, room=str(corrida_id))
+
 
 # 3. Bloco de execução principal no final do arquivo
 if __name__ == "__main__":
     inicializar_banco()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # 🟢 SUBSTITUÍMOS O APP.RUN PELO SOCKETIO.RUN
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
