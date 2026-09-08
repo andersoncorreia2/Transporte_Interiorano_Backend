@@ -4,7 +4,7 @@ import requests
 import uuid
 from flask import jsonify, request
 import traceback
-from datetime import datetime, timedelta, timezone  # <--- 1. Certifique-se de importar datetime, timedelta e timezone no topo
+from datetime import datetime, timedelta, timezone
 
 def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, enviar_notificacao):
 
@@ -26,7 +26,7 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, e
 
             # 🔍 VERIFICAÇÃO ATIVA NO MERCADO PAGO CASO TENHA UM PAGAMENTO PENDENTE
             cursor.execute("""
-                SELECT payment_id, corrida_id FROM debitos_passageiros 
+                SELECT payment_id, corrida_id, status FROM debitos_passageiros 
                 WHERE passageiro_cpf = %s AND status = 'pendente' AND payment_id IS NOT NULL
                 ORDER BY id DESC LIMIT 1
             """, (passageiro_cpf,))
@@ -35,9 +35,10 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, e
             if debito_pendente:
                 payment_id = debito_pendente[0]
                 corrida_id_cadastrada = debito_pendente[1]
+                status_banco = debito_pendente[2]
                 
                 access_token = os.getenv("MERCADO_PAGO_ACCESS_TOKEN", "").strip()
-                if access_token:
+                if access_token and status_banco != 'aprovado':
                     headers = {"Authorization": f"Bearer {access_token}"}
                     try:
                         res = requests.get(f"https://api.mercadopago.com/v1/payments/{payment_id}", headers=headers, timeout=5)
@@ -51,17 +52,23 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, e
                                 cursor.execute("UPDATE debitos_passageiros SET status = 'aprovado' WHERE payment_id = %s", (str(payment_id),))
                                 cursor.execute("UPDATE usuarios SET bloqueado = FALSE WHERE cpf = %s", (passageiro_cpf,))
                                 conexao.commit()
-                                print(f"🎉 AUTO-CHECK: Passageiro CPF {passageiro_cpf} desbloqueado com sucesso!")
 
-                                # 🟢 DISPARA A NOTIFICAÇÃO PUSH DE LIBERAÇÃO
+                                # 🟢 INTELIGÊNCIA: Diferencia se é corrida nova ou quitação de dívida
+                                descricao = pagamento_info.get("description", "")
+                                is_antecipado = "Antecipado" in descricao
+
+                                if is_antecipado:
+                                    titulo_push = "✅ Pagamento Confirmado!"
+                                    corpo_push = "Seu Pix foi aprovado com sucesso. Já estamos buscando motoristas!"
+                                else:
+                                    titulo_push = "🎉 Conta Desbloqueada!"
+                                    corpo_push = "Seu débito foi quitado. Você já pode solicitar novas corridas!"
+
+                                # 🟢 DISPARA A NOTIFICAÇÃO PUSH CORRETA
                                 cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (passageiro_cpf,))
                                 pass_data = cursor.fetchone()
                                 if pass_data and pass_data[0]:
-                                    enviar_notificacao(
-                                        pass_data[0], 
-                                        "🎉 Conta Desbloqueada!", 
-                                        "Seu pagamento foi confirmado. Você já pode solicitar novas corridas!"
-                                    )
+                                    enviar_notificacao(pass_data[0], titulo_push, corpo_push)
                     except Exception as ex:
                         print(f"⚠️ Erro ao consultar status no Mercado Pago: {ex}")
 
@@ -253,29 +260,37 @@ def configurar_rotas_pagamento_emergente(app, conectar_banco, token_requerido, e
                 conexao = conectar_banco()
                 cursor = conexao.cursor()
                 try:
-                    cursor.execute("SELECT passageiro_cpf, corrida_id FROM debitos_passageiros WHERE payment_id = %s", (str(payment_id),))
+                    cursor.execute("SELECT passageiro_cpf, corrida_id, status FROM debitos_passageiros WHERE payment_id = %s", (str(payment_id),))
                     debito = cursor.fetchone()
 
                     if debito:
-                        passageiro_cpf, corrida_id = debito[0], debito[1]
+                        passageiro_cpf, corrida_id, status_db = debito[0], debito[1], debito[2]
 
-                        if corrida_id:
-                            cursor.execute("UPDATE corridas_emergentes SET pago = TRUE, status = 'Procurando' WHERE id = %s", (corrida_id,))
-                        cursor.execute("UPDATE debitos_passageiros SET status = 'aprovado' WHERE payment_id = %s", (str(payment_id),))
-                        cursor.execute("UPDATE usuarios SET bloqueado = FALSE WHERE cpf = %s", (passageiro_cpf,))
+                        # 🟢 TRAVA DE DUPLICIDADE: Impede processar e avisar o celular duas vezes!
+                        if status_db != 'aprovado':
+                            if corrida_id:
+                                cursor.execute("UPDATE corridas_emergentes SET pago = TRUE, status = 'Procurando' WHERE id = %s", (corrida_id,))
+                            cursor.execute("UPDATE debitos_passageiros SET status = 'aprovado' WHERE payment_id = %s", (str(payment_id),))
+                            cursor.execute("UPDATE usuarios SET bloqueado = FALSE WHERE cpf = %s", (passageiro_cpf,))
 
-                        conexao.commit()
-                        print(f"🎉 SUCESSO! Passageiro CPF {passageiro_cpf} desbloqueado via Pix!")
+                            conexao.commit()
 
-                        # 🟢 DISPARA A NOTIFICAÇÃO PUSH VIA WEBHOOK
-                        cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (passageiro_cpf,))
-                        pass_data = cursor.fetchone()
-                        if pass_data and pass_data[0]:
-                            enviar_notificacao(
-                              pass_data[0], 
-                              "🎉 Conta Desbloqueada!", 
-                              "Seu pagamento foi confirmado. Você já pode solicitar novas corridas!"
-                          )
+                            # 🟢 INTELIGÊNCIA: Diferencia se é corrida nova ou quitação de dívida
+                            descricao = payment_info.get("description", "")
+                            is_antecipado = "Antecipado" in descricao
+
+                            if is_antecipado:
+                                titulo_push = "✅ Pagamento Confirmado!"
+                                corpo_push = "Seu Pix foi aprovado com sucesso. Já estamos buscando motoristas!"
+                            else:
+                                titulo_push = "🎉 Conta Desbloqueada!"
+                                corpo_push = "Seu débito foi quitado. Você já pode solicitar novas corridas!"
+
+                            # 🟢 DISPARA A NOTIFICAÇÃO PUSH VIA WEBHOOK UMA ÚNICA VEZ
+                            cursor.execute("SELECT fcm_token FROM usuarios WHERE cpf = %s", (passageiro_cpf,))
+                            pass_data = cursor.fetchone()
+                            if pass_data and pass_data[0]:
+                                enviar_notificacao(pass_data[0], titulo_push, corpo_push)
                 finally:
                     cursor.close()
                     conexao.close()
